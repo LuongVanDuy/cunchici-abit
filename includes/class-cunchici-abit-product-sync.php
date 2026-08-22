@@ -13,7 +13,6 @@ class Cunchici_Abit_Product_Sync {
 		$this->repository = $repository;
 	}
 
-	/** Process exactly one queued product for accurate product-level progress. */
 	public function process_run_step( $run_id ) {
 		if ( ! class_exists( 'WooCommerce' ) || ! function_exists( 'wc_get_product' ) ) {
 			return new WP_Error( 'cunchici_abit_woocommerce_missing', 'WooCommerce chưa được kích hoạt.' );
@@ -96,8 +95,6 @@ class Cunchici_Abit_Product_Sync {
 			}
 		}
 
-		// The verified Abit list response has no separate color/size fields.
-		// Never erase existing WooCommerce attributes with an empty set.
 		if ( $this->has_mapped_attributes( $mapped ) ) {
 			$product->set_attributes( $this->build_attributes( $mapped ) );
 		}
@@ -125,10 +122,12 @@ class Cunchici_Abit_Product_Sync {
 			return;
 		}
 
+		$existing_ids = array_map( 'absint', $product->get_category_ids() );
+
 		if ( 'fixed' === $mode ) {
 			$term_id = isset( $options['fixed_category_id'] ) ? absint( $options['fixed_category_id'] ) : 0;
 			if ( $term_id && term_exists( $term_id, 'product_cat' ) ) {
-				$product->set_category_ids( array( $term_id ) );
+				$product->set_category_ids( array_values( array_unique( array_merge( $existing_ids, array( $term_id ) ) ) ) );
 			}
 			return;
 		}
@@ -160,7 +159,7 @@ class Cunchici_Abit_Product_Sync {
 		}
 
 		if ( $ids ) {
-			$product->set_category_ids( array_values( array_unique( $ids ) ) );
+			$product->set_category_ids( array_values( array_unique( array_merge( $existing_ids, $ids ) ) ) );
 		}
 	}
 
