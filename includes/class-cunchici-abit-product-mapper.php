@@ -100,10 +100,15 @@ class Cunchici_Abit_Product_Mapper {
 	}
 
 	/**
-	 * Abit mixes existing HTML with plain text containing CR/LF. Live probing
-	 * found 1,899 active products with newline characters but no <br> tags. A
-	 * raw newline is not a visible HTML line break, so normalize CR/LF and let
-	 * WordPress create paragraphs/line breaks while preserving safe source HTML.
+	 * Abit mixes three content styles in the same fields:
+	 * - proper HTML;
+	 * - plain text with CR/LF;
+	 * - plain one-line marketplace text where headings/bullets lost line breaks.
+	 *
+	 * Preserve structural HTML as-is. For plain text, normalize existing CR/LF
+	 * and recover only conservative marketplace structure (known section
+	 * headings, repeated " - " bullets, first hashtag block), then let wpautop()
+	 * produce safe paragraphs/line breaks.
 	 */
 	private static function rich_text( $value ) {
 		$text = is_scalar( $value ) ? (string) $value : '';
@@ -112,10 +117,63 @@ class Cunchici_Abit_Product_Mapper {
 		}
 
 		$text = str_replace( array( "\r\n", "\r" ), "\n", $text );
+
+		$has_structural_html = (bool) preg_match( '/<(?:p|br|ul|ol|li|div|h[1-6]|table|blockquote)\b/i', $text );
+		if ( ! $has_structural_html ) {
+			$text = self::structure_plain_text( $text );
+		}
+
 		$text = preg_replace( "/\n{3,}/", "\n\n", $text );
 		$text = wp_kses_post( $text );
 
 		return wpautop( $text );
+	}
+
+	/**
+	 * Recover line structure from one-line marketplace descriptions without
+	 * trying to rewrite normal prose. This is intentionally conservative.
+	 */
+	private static function structure_plain_text( $text ) {
+		$headings = array(
+			'THÔNG TIN SẢN PHẨM',
+			'THÔNG TIN CHI TIẾT',
+			'MÔ TẢ SẢN PHẨM',
+			'HƯỚNG DẪN SỬ DỤNG',
+			'HƯỚNG DẪN BẢO QUẢN',
+			'CAM KẾT',
+			'CHÚ Ý',
+			'LƯU Ý',
+			'CHÍNH SÁCH ĐỔI TRẢ',
+			'CHÍNH SÁCH BẢO HÀNH',
+		);
+
+		$heading_pattern = '/(^|[.!?]\s+|\n+)(' . implode( '|', array_map( function ( $heading ) {
+			return preg_quote( $heading, '/' );
+		}, $headings ) ) . ')\s*:?\s*(?=-|\p{L}|\p{N}|\[)/iu';
+
+		$has_heading = (bool) preg_match( $heading_pattern, $text );
+		$text = preg_replace_callback(
+			$heading_pattern,
+			function ( $matches ) {
+				$prefix = isset( $matches[1] ) ? rtrim( $matches[1] ) : '';
+				$prefix = '' !== $prefix ? $prefix . "\n\n" : '';
+				return $prefix . trim( $matches[2] ) . ":\n\n";
+			},
+			$text
+		);
+
+		// A repeated spaced dash is a strong list signal. If a known section
+		// heading exists, even one dash immediately after it is treated as a bullet.
+		$spaced_dash_count = substr_count( $text, ' - ' );
+		if ( $has_heading || $spaced_dash_count >= 2 ) {
+			$text = preg_replace( '/[ \t]+-\s+(?=[\p{L}\p{N}\[])/u', "\n- ", $text );
+		}
+
+		// Marketplace hashtags are metadata-like content; keep them together but
+		// visually separate the block from the preceding description.
+		$text = preg_replace( '/\s+(?=#\S)/u', "\n\n", $text, 1 );
+
+		return trim( $text );
 	}
 
 	/**
