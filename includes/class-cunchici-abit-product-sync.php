@@ -49,6 +49,21 @@ class Cunchici_Abit_Product_Sync {
 			$result       = $this->upsert( $mapped, $options );
 			$action       = $result['action'];
 			$image_result = isset( $result['images'] ) ? $result['images'] : null;
+
+			// If Abit supplied image URLs but none could be applied, keep the Woo
+			// data/image already saved but mark the candidate error so the admin can
+			// see and retry the image failure later.
+			if ( ! empty( $mapped['images'] ) && is_array( $image_result ) && empty( $image_result['applied'] ) ) {
+				$warnings = isset( $image_result['warnings'] ) && is_array( $image_result['warnings'] ) ? $image_result['warnings'] : array();
+				$message  = 'Không đồng bộ được ảnh Abit.';
+				if ( $warnings ) {
+					$message .= ' ' . implode( ' | ', array_slice( $warnings, 0, 3 ) );
+				}
+				$this->repository->finish_item( $run_id, $item['id'], false, $result['product_id'], $message );
+				$run = $this->repository->mark_completed_if_done( $run_id );
+				return $this->progress_payload( $run, $item, $action, $message, $image_result );
+			}
+
 			$this->repository->finish_item( $run_id, $item['id'], true, $result['product_id'], '' );
 		} catch ( Throwable $e ) {
 			$this->repository->finish_item( $run_id, $item['id'], false, 0, $e->getMessage() );
