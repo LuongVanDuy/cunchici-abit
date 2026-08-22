@@ -1,0 +1,1 @@
+Final syntax validation after image failure reporting guard.
