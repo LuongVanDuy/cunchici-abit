@@ -9,12 +9,78 @@ README này là **bản đồ kỹ thuật trung tâm** của plugin. Khi đổi
 ## 1. Version hiện tại
 
 ```text
-0.2.4
+0.2.5
 ```
 
-### 0.2.4 — sửa import ảnh + giữ xuống dòng mô tả
+### 0.2.5 — phục hồi cấu trúc mô tả bị Abit trả thành một dòng
 
-Live CI probe ngày 2026-08-22 đã xác minh trực tiếp catalog thật:
+Bản 0.2.4 xử lý tốt mô tả có CR/LF thật bằng `wpautop()`, nhưng một số mô tả marketplace trên Abit đã mất toàn bộ newline và chỉ còn một chuỗi dài.
+
+0.2.5 bổ sung rule **chỉ cho plain text**, không sửa nội dung đã có HTML cấu trúc.
+
+Flow:
+
+```text
+source description / short_description
+→ normalize CRLF/CR thành LF
+→ nếu đã có <p>/<br>/<ul>/<ol>/<li>/<div>/heading/table/blockquote:
+     giữ cấu trúc HTML nguồn
+→ nếu là plain text:
+     nhận diện section heading bảo thủ
+     tách repeated " - " thành bullet line
+     tách block hashtag khỏi nội dung chính
+→ wp_kses_post()
+→ wpautop()
+→ lưu WooCommerce description / short_description
+```
+
+Các heading hiện được nhận diện khi xuất hiện ở đầu đoạn hoặc sau dấu kết thúc câu:
+
+```text
+THÔNG TIN SẢN PHẨM
+THÔNG TIN CHI TIẾT
+MÔ TẢ SẢN PHẨM
+HƯỚNG DẪN SỬ DỤNG
+HƯỚNG DẪN BẢO QUẢN
+CAM KẾT
+CHÚ Ý
+LƯU Ý
+CHÍNH SÁCH ĐỔI TRẢ
+CHÍNH SÁCH BẢO HÀNH
+```
+
+Ví dụ source một dòng:
+
+```text
+... balô của bé. THÔNG TIN SẢN PHẨM - Tên sản phẩm ... - Chất liệu ... CAM KẾT: ... CHÚ Ý ... #tag1 #tag2
+```
+
+được cấu trúc lại thành:
+
+```text
+... balô của bé.
+
+THÔNG TIN SẢN PHẨM:
+
+- Tên sản phẩm ...
+- Chất liệu ...
+
+CAM KẾT:
+
+...
+
+CHÚ Ý:
+
+...
+
+#tag1 #tag2
+```
+
+Rule này không cố tách mọi câu và không rewrite câu chữ, để tránh làm hỏng prose bình thường.
+
+### 0.2.4 — import ảnh + newline mô tả
+
+Live CI probe ngày 2026-08-22 đã xác minh:
 
 ```text
 Active rows checked                2579
@@ -33,65 +99,33 @@ short_description có <br>             0
 short_description có <p>            372
 ```
 
-Probe tải trực tiếp 3 URL ảnh Shopee CDN thật và cả 3 đều trả:
+Probe tải trực tiếp 3 URL Shopee CDN thật: cả 3 HTTP 200, `Content-Type: image/jpeg`, magic bytes JPEG hợp lệ.
 
-```text
-HTTP 200
-Content-Type: image/jpeg
-JPEG magic bytes: FF D8 FF E0 ...
-```
-
-Kết luận:
-
-- Abit/Shopee CDN có ảnh hợp lệ; lỗi 0.2.3 nằm ở cách importer WordPress stream trực tiếp vào temp file trên một số hosting.
-- 1.899 sản phẩm dùng newline thuần trong mô tả, nên chỉ `wp_kses_post()` không tạo xuống dòng HTML nhìn thấy được.
-
-0.2.4 đổi thành:
+Kết luận đã áp dụng:
 
 ```text
 Ảnh:
 wp_safe_remote_get() lấy body có giới hạn
-→ ghi body vào temp file
-→ wp_get_image_mime() đọc MIME thật
-→ đặt filename local có extension đúng
+→ ghi temp file
+→ detect MIME thật
+→ filename local có extension đúng
 → media_handle_sideload()
-→ featured image + gallery
+→ featured + gallery
 
-Mô tả:
-CR/LF Abit
-→ normalize newline
-→ wp_kses_post()
+Mô tả có newline thật:
+CR/LF
+→ normalize
+→ sanitize
 → wpautop()
-→ paragraph / line break hợp lệ trong WooCommerce
 ```
 
-Product meta debug ảnh mới:
+Product meta debug ảnh:
 
 ```text
 _cunchici_abit_last_image_sync
 ```
 
-Meta này lưu JSON `total/imported/reused/applied/warnings/synced_at` để biết chính xác lần import ảnh gần nhất thành công hay lỗi ở bước nào.
-
-### 0.2.3 — nguồn ảnh đã xác minh
-
-`imagename` là JSON string, ví dụ:
-
-```json
-[
-  {
-    "id": 1,
-    "isDefault": true,
-    "imgSrc": "https://cf.shopee.vn/file/..."
-  }
-]
-```
-
-Nhiều URL không có `.jpg/.png`; vì vậy không dùng `media_sideload_image()` trực tiếp theo extension URL.
-
-### 0.2.2 — rule active/inactive đã xác minh
-
-Live audit catalog:
+### 0.2.2 — active/inactive đã xác minh bằng API thật
 
 ```text
 API total rows             2624
@@ -107,11 +141,11 @@ Empty SKU                     0
 Số 2579 trên Abit Admin khớp chính xác `status=1`.
 
 ```text
-status=1 → active → được phép sync WooCommerce
-status=0 → inactive → ignored, không được normal sync
+status=1 → active → syncable
+status=0 → inactive → ignored
 ```
 
-Date-filter probe với range năm 2099 trả 0 rows, nên hiện có thể dùng `date_time_start/date_time_end` cho incremental discovery.
+Date-filter probe với range năm 2099 trả 0 rows, nên hiện plugin tiếp tục dùng `date_time_start/date_time_end` cho incremental discovery.
 
 ---
 
@@ -124,13 +158,13 @@ Abit tách biến thể thành sản phẩm đơn:
 → 1 WooCommerce simple product
 ```
 
-Plugin không tạo variable product, không gom SKU thành parent/variation và không tự đoán quan hệ cha/con.
+Không tạo variable product, không gom SKU thành parent/variation, không tự đoán quan hệ cha/con.
 
 ---
 
 ## 3. Payload list product đã xác minh
 
-Các field đã thấy trên API thật:
+Các field thật đã thấy:
 
 ```text
 productcode
@@ -167,9 +201,9 @@ Rule quan trọng:
 
 - `status=1`: active.
 - `status=0`: inactive/ignored.
-- `imagename`: JSON string chứa ảnh, `imgSrc` là URL nguồn.
-- `default_image`: optional, không thể dùng làm nguồn ảnh duy nhất.
-- `description` / `short_description`: có thể là HTML hoặc plain text chứa CR/LF.
+- `imagename`: JSON string; ảnh nằm trong `imgSrc`.
+- `default_image`: optional, không dùng làm nguồn ảnh duy nhất.
+- `description` / `short_description`: có thể là HTML, plain text có CR/LF, hoặc plain one-line marketplace text.
 - Chưa có field màu riêng đã xác minh.
 - Chưa có field size riêng đã xác minh.
 - `tonkho_toithieu` / `tonkho_toida` không phải current stock.
@@ -178,19 +212,19 @@ Rule quan trọng:
 
 ## 4. Abit API
 
-Base URL:
+Base:
 
 ```text
 https://new.abitstore.vn
 ```
 
-### Products
+Products:
 
 ```http
 POST /products/listProductsforPartner
 ```
 
-Request hỗ trợ:
+Payload hỗ trợ:
 
 ```json
 {
@@ -203,69 +237,32 @@ Request hỗ trợ:
 }
 ```
 
-### Stores
+Stores:
 
 ```http
 POST /productstore/getStoreidByPartner
 ```
 
-### Products + stock
+Products + stock:
 
 ```http
 POST /products/listProductsWithStockforPartner
 ```
 
-Cần `productstoreid`. Current stock chưa được map cho tới khi xác minh payload thật.
+Cần `productstoreid`. Current stock chưa map cho tới khi xác minh payload thật.
 
 ---
 
-## 5. Discovery và incremental
+## 5. Discovery / Candidate / Incremental
 
 Plugin tách:
 
 ```text
-DISCOVERY = đã đọc/upsert candidate từ Abit
-SYNC      = đã ghi candidate vào WooCommerce
+DISCOVERY = đọc/upsert candidate từ Abit
+SYNC      = ghi candidate vào WooCommerce
 ```
 
-Ví dụ:
-
-```text
-Ngày 1 discovery 500 active
-sync 100
-→ 100 synced + 400 pending
-
-Ngày 2 Abit thêm 10 active
-incremental discovery
-→ 100 synced + 410 pending
-```
-
-Pending cũ không mất khi sang ngày mới.
-
-Checkpoint options:
-
-```text
-cunchici_abit_discovery_state
-cunchici_abit_discovery_checkpoint_end
-```
-
-Checkpoint chỉ tiến sau khi quét hết pagination của range. Reload/lỗi giữa chừng không nhảy checkpoint.
-
-Incremental mặc định overlap:
-
-```text
-checkpoint - 5 phút
-```
-
-Candidate unique theo `productid`, nên overlap không tạo duplicate.
-
-Full scan có thể đọc 2624 API rows nhưng 45 `status=0` bị ignored; normal syncable catalog là 2579 active.
-
----
-
-## 6. Candidate Queue
-
-Table:
+Candidate table:
 
 ```text
 {wp_prefix}cunchici_abit_items
@@ -276,19 +273,30 @@ Table:
 Status:
 
 ```text
-pending  = active, cần sync / source đổi
+pending  = active, cần sync hoặc source đổi
 synced   = active, đã sync thành công
 error    = active, lần sync gần nhất lỗi
-ignored  = inactive, không được Sync Run
+ignored  = inactive/status != 1
 ```
 
-Nếu Abit đổi `status=0 → 1`, discovery đưa candidate `ignored → pending`.
+Pending cũ không mất khi incremental ngày sau.
+
+Checkpoint:
+
+```text
+cunchici_abit_discovery_state
+cunchici_abit_discovery_checkpoint_end
+```
+
+Checkpoint chỉ tiến sau khi quét hết pagination. Incremental overlap mặc định `checkpoint - 5 phút`.
+
+Full API có thể đọc 2624 rows nhưng normal syncable catalog là 2579 active.
 
 ---
 
-## 7. Sync Run
+## 6. Sync Run
 
-Table:
+Run table:
 
 ```text
 {wp_prefix}cunchici_abit_runs
@@ -304,27 +312,34 @@ completed
 cancelled
 ```
 
-Mỗi AJAX xử lý 1 candidate.
-
-```text
-percent = processed / total × 100
-```
-
-Reload không auto resume. Không cho tạo run thứ hai khi còn run queued/running/paused. Một product lỗi không dừng toàn run.
+Mỗi AJAX xử lý 1 candidate. Reload không auto resume. Không tạo run thứ hai khi còn run queued/running/paused. Một product lỗi không dừng toàn run.
 
 ---
 
-## 8. WooCommerce upsert
+## 7. WooCommerce upsert
 
-Tìm product theo thứ tự:
+Tìm product:
 
 ```text
 1. _cunchici_abit_product_id == productid
-2. WooCommerce SKU == productcode
-3. chưa có → WC_Product_Simple mới
+2. fallback WooCommerce SKU == productcode
+3. chưa có → WC_Product_Simple
 ```
 
-Không tự convert product type. SKU đã thuộc product khác → error.
+Không tự convert product type. Duplicate SKU → error.
+
+Sync hiện ghi:
+
+```text
+name
+regular price / price
+SKU
+description
+short_description
+category theo run option
+Abit metadata
+featured image / gallery
+```
 
 Meta chính:
 
@@ -338,79 +353,66 @@ _cunchici_abit_ma_goc
 
 ---
 
-## 9. Mô tả dài / mô tả ngắn — 0.2.4
+## 8. Mô tả dài / mô tả ngắn
 
-File chịu trách nhiệm:
+File:
 
 ```text
 includes/class-cunchici-abit-product-mapper.php
 ```
 
-`rich_text()` xử lý cả hai trường:
+Functions:
 
 ```text
-description
-short_description
+rich_text()
+structure_plain_text()
 ```
 
-Flow:
+Nguyên tắc:
 
-```text
-source string
-→ CRLF/CR thành LF
-→ giảm chuỗi blank line quá dài
-→ wp_kses_post()
-→ wpautop()
-```
-
-Mục tiêu:
-
-- plain text có newline từ Abit hiển thị thành paragraph/line break;
-- HTML an toàn có sẵn vẫn được giữ;
-- không tự suy diễn thêm nội dung nếu source không có newline/markup.
+- HTML có cấu trúc: giữ HTML an toàn, không suy diễn heading/bullet.
+- Plain text có newline: giữ newline rồi `wpautop()`.
+- Plain one-line: chỉ tách heading đã biết, repeated spaced-dash bullets và first hashtag block.
+- Không sửa câu chữ.
+- Cả `description` và `short_description` dùng cùng pipeline.
 
 ---
 
-## 10. Đồng bộ ảnh — 0.2.4
+## 9. Đồng bộ ảnh
 
-### Nguồn ảnh
-
-Mapper đọc:
+Nguồn:
 
 ```text
 default_image
 imagename[].imgSrc
 ```
 
-Thứ tự:
+Thứ tự ưu tiên:
 
-1. `default_image` nếu có;
-2. `imagename` có `isDefault=true`;
-3. các ảnh còn lại.
+```text
+1. default_image nếu có
+2. imagename isDefault=true
+3. các ảnh còn lại
+```
 
-URL unique trước khi import.
-
-### Import Media Library
-
-File:
+Importer:
 
 ```text
 includes/class-cunchici-abit-media-sync.php
 ```
 
-Flow 0.2.4:
+Flow:
 
 ```text
-source URL
-→ validate http/https public URL
-→ wp_safe_remote_get() lấy body, cap 25 MB
-→ kiểm tra HTTP status + Content-Type
-→ ghi body vào temp file
-→ wp_get_image_mime() detect file thật
-→ map MIME → extension hợp lệ
+validate URL
+→ wp_safe_remote_get() body, cap 25 MB
+→ HTTP + Content-Type
+→ temp file
+→ wp_get_image_mime()
+→ map MIME → extension
 → media_handle_sideload()
-→ attachment meta source URL/hash
-→ featured image + gallery
+→ attachment source meta
+→ featured + gallery
 ```
 
 Dedupe attachment toàn site bằng source URL hash:
@@ -429,148 +431,137 @@ _cunchici_abit_image_ids
 _cunchici_abit_last_image_sync
 ```
 
-Safety:
+Safety ảnh:
 
-- Không tự xóa Media Library attachment cũ.
-- Không clear featured/gallery nếu remote image lỗi hết.
-- Một ảnh lỗi nhưng ảnh khác thành công → dùng ảnh thành công.
-- Tất cả ảnh lỗi → candidate thành `error`, Woo product data đã lưu vẫn giữ và ảnh Woo cũ không bị xóa.
-- Error message phân biệt WordPress HTTP / HTTP status / body rỗng / MIME / Media Library sideload.
+- Không xóa attachment cũ tự động.
+- Không clear featured/gallery nếu remote lỗi hết.
+- Một ảnh lỗi, ảnh khác thành công → dùng ảnh thành công.
+- Tất cả ảnh lỗi → candidate error; Woo product data và ảnh cũ vẫn giữ.
 
 ---
 
-## 11. Danh mục
+## 10. Danh mục
 
-Sync Run modes:
+Run modes:
 
 ```text
-keep  = không thay đổi category
+keep  = giữ category hiện tại
 abit  = append category từ productcategory
 fixed = append category WooCommerce được chọn
 ```
 
-Không xóa category quản trị thủ công.
+Không xóa toàn bộ category cũ.
 
 ---
 
-## 12. Màu / Size / Stock
+## 11. Màu / Size / Stock
 
-### Màu / Size
+Màu/Size chưa có source field xác minh nên mapper trả rỗng và plugin không xóa attributes Woo hiện có.
 
-Chưa có source field xác minh:
-
-```text
-không map được
-→ không gọi set_attributes([])
-→ không xóa attributes hiện có
-```
-
-### Stock
-
-Chưa ghi current stock. Không dùng `tonkho_toithieu/tonkho_toida` làm số lượng hiện tại.
+Current stock chưa được ghi. Không dùng `tonkho_toithieu/tonkho_toida` làm quantity.
 
 ---
 
-## 13. Bản đồ file
+## 12. Bản đồ file
 
 ### `cunchici-abit.php`
 Bootstrap, version, require class, activation/migration wiring.
 
 ### `includes/class-cunchici-abit-settings.php`
-`base_url`, Access Token, Partner Name, Product Store ID, sync limit.
+Base URL, Access Token, Partner Name, Product Store ID, sync limit.
 
 ### `includes/class-cunchici-abit-db.php`
-Schema candidate/run và dbDelta migration.
+Schema candidate + run, indexes, dbDelta.
 
 ### `includes/class-cunchici-abit-api.php`
-HTTP client Abit, products/date range, stores, stock endpoint.
+Abit HTTP client; list products/date range, stores, stock endpoint.
 
 ### `includes/class-cunchici-abit-product-mapper.php`
-Map product fields; normalize category; parse `imagename`; normalize long/short description bằng `rich_text()`.
+Map product fields, category, image source và formatting description/short_description. Nếu text bị dính một dòng → sửa file này đầu tiên.
 
 ### `includes/class-cunchici-abit-media-sync.php`
-Download ảnh, MIME detect, Media Library sideload, dedupe, featured/gallery, image debug meta. Nếu ảnh lỗi → kiểm tra file này đầu tiên.
+Remote image download, MIME, sideload, dedupe, featured/gallery, debug meta.
 
 ### `includes/class-cunchici-abit-sync-repository.php`
-Candidate/run DB, pending/synced/error/ignored, filters, queue, server-side guards, progress.
+Candidate/run DB; pending/synced/error/ignored; filters; queue; server-side guards; progress.
 
 ### `includes/class-cunchici-abit-discovery.php`
 Full/incremental discovery, pagination, checkpoint, overlap, inactive handling.
 
 ### `includes/class-cunchici-abit-product-sync.php`
-Simple product upsert, description/price/SKU/category/meta, gọi Media Sync, image failure → candidate error.
+Woo simple-product upsert, category/meta, Media Sync call, per-item error isolation.
 
 ### `includes/class-cunchici-abit-admin.php`
-Settings, Sync Center markup, AJAX controllers, diagnostic.
+Settings, Sync Center, AJAX controllers, diagnostic.
 
 ### `includes/class-cunchici-abit-audit.php`
 Read-only catalog reconciliation.
 
 ### `assets/admin.js`
-Discovery loop, candidate filter/select, run loop, progress, Pause/Resume/Cancel.
+Discovery loop, filter/select, Sync Run loop, progress, Pause/Resume/Cancel.
 
 ### `assets/admin.css`
-Admin styles.
+Admin UI styles.
 
 ### `.github/workflows/lint.yml`
-PHP/JS syntax checks.
+PHP/JS syntax.
 
 ### `.github/workflows/abit-audit.yml`
-Live catalog/status/date-filter audit bằng repository secret.
+Live catalog/status/date-filter audit dùng Actions Secret.
 
 ### `.github/workflows/abit-image-probe.yml`
-Live read-only probe cho image payload, CDN response và description line-break format.
+Read-only image/CDN/description format probe.
 
 ### `docs/abit-product-audit-2026-08-22.json`
-Snapshot verified catalog count/status.
+Verified catalog count/status snapshot.
 
 ### `docs/abit-image-probe-2026-08-22.json`
-Snapshot verified image payload format/coverage.
+Verified image payload coverage/shape.
+
+### `docs/abit-image-content-probe-2026-08-22.json`
+Verified image CDN response + description/short-description format snapshot.
 
 ---
 
-## 14. Safety rules
+## 13. Safety rules
 
 1. Discovery không ghi WooCommerce.
 2. Audit/probe không ghi WooCommerce.
 3. `status!=1` không được normal sync.
 4. Server-side queue chặn `ignored`.
 5. Reload không auto resume.
-6. Checkpoint không update nếu scan chưa hoàn tất.
+6. Checkpoint không tiến nếu scan chưa hoàn tất.
 7. Product lỗi không dừng toàn run.
 8. Không xóa Woo product khi Abit không trả về.
 9. Không đổi product type tự động.
 10. Không đoán current stock.
 11. Không xóa attributes khi source không có color/size.
-12. Không xóa ảnh Woo nếu source image rỗng/lỗi.
+12. Không xóa ảnh Woo nếu remote image rỗng/lỗi.
 13. Không tự xóa attachment cũ.
 14. Remote image phải qua URL validation + WP safe HTTP.
-15. Không commit Access Token.
-16. AJAX phải có nonce + `manage_woocommerce`.
+15. Description formatter không rewrite câu chữ và không suy diễn cấu trúc khi source đã có HTML block.
+16. Không commit Access Token.
+17. AJAX phải có nonce + `manage_woocommerce`.
 
 ---
 
-## 15. Flow test sau release
-
-Sau mỗi thay đổi mapping/importer:
+## 14. Flow test sau release
 
 ```text
 Update plugin
 → filter một product đã synced
 → re-sync đúng 1 product
 → kiểm tra title/SKU/price
-→ kiểm tra mô tả dài + ngắn xuống dòng
-→ kiểm tra Media Library
-→ kiểm tra featured image + gallery
-→ nếu lỗi, đọc candidate last_error và _cunchici_abit_last_image_sync
-→ chỉ tăng phạm vi sau khi sample đúng
+→ kiểm tra description + short_description
+→ kiểm tra Media Library / featured / gallery
+→ nếu sample đúng mới tăng phạm vi
 ```
 
 Plugin không tự re-sync toàn catalog khi update version.
 
 ---
 
-## 16. Việc còn lại Phase 1
+## 15. Việc còn lại Phase 1
 
 - [x] Audit API total vs Admin.
 - [x] Chốt active/inactive.
@@ -578,7 +569,8 @@ Plugin không tự re-sync toàn catalog khi update version.
 - [x] Xác minh payload ảnh.
 - [x] Probe CDN ảnh thật.
 - [x] Import/dedupe featured + gallery.
-- [x] Normalize description line breaks.
+- [x] Normalize CR/LF description.
+- [x] Recover conservative structure cho one-line description.
 - [ ] Xác minh payload tồn kho.
 - [ ] Map current stock.
 - [ ] Xác định nguồn màu.
@@ -588,7 +580,7 @@ Plugin không tự re-sync toàn catalog khi update version.
 
 ---
 
-## 17. Khi cần sửa gì thì vào đâu?
+## 16. Khi cần sửa gì thì vào đâu?
 
 ```text
 Token / Partner / Kho / Limit
@@ -598,7 +590,7 @@ Token / Partner / Kho / Limit
 Endpoint / request / date range
 → class-cunchici-abit-api.php
 
-SKU / giá / category / description / parse image source
+SKU / giá / category / description / short description / parse image source
 → class-cunchici-abit-product-mapper.php
 
 Download ảnh / HTTP / MIME / Media Library / featured-gallery / dedupe
