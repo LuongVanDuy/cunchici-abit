@@ -3,6 +3,50 @@
 defined( 'ABSPATH' ) || exit;
 
 class Cunchici_Abit_Sync_Repository {
+	const STATUS_NORMALIZED_OPTION = 'cunchici_abit_source_status_normalized_0_2_2';
+
+	public function normalize_inactive_candidates_once() {
+		if ( get_option( self::STATUS_NORMALIZED_OPTION ) ) {
+			return;
+		}
+
+		global $wpdb;
+		$table = Cunchici_Abit_DB::items_table();
+		$rows  = $wpdb->get_results( "SELECT id, payload, sync_status FROM {$table}", ARRAY_A );
+
+		foreach ( $rows as $row ) {
+			$payload = json_decode( isset( $row['payload'] ) ? $row['payload'] : '', true );
+			if ( ! is_array( $payload ) || ! array_key_exists( 'status', $payload ) ) {
+				continue;
+			}
+
+			$is_active = '1' === (string) $payload['status'];
+			if ( ! $is_active && 'ignored' !== $row['sync_status'] ) {
+				$wpdb->update(
+					$table,
+					array(
+						'sync_status'  => 'ignored',
+						'queue_run_id' => null,
+						'queue_status' => null,
+						'last_error'   => null,
+					),
+					array( 'id' => (int) $row['id'] )
+				);
+			} elseif ( $is_active && 'ignored' === $row['sync_status'] ) {
+				$wpdb->update(
+					$table,
+					array(
+						'sync_status' => 'pending',
+						'last_error'  => null,
+					),
+					array( 'id' => (int) $row['id'] )
+				);
+			}
+		}
+
+		update_option( self::STATUS_NORMALIZED_OPTION, 1, false );
+	}
+
 	public function upsert_candidate( array $mapped, array $raw ) {
 		global $wpdb;
 		$table   = Cunchici_Abit_DB::items_table();
@@ -11,6 +55,7 @@ class Cunchici_Abit_Sync_Repository {
 			return false;
 		}
 
+		$is_active   = ! array_key_exists( 'status', $raw ) || '1' === (string) $raw['status'];
 		$payload      = wp_json_encode( $raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 		$payload_hash = sha1( (string) $payload );
 		$existing     = $wpdb->get_row( $wpdb->prepare( "SELECT id, payload_hash, sync_status, woo_product_id FROM {$table} WHERE abit_product_id = %s", $abit_id ), ARRAY_A );
@@ -34,12 +79,21 @@ class Cunchici_Abit_Sync_Repository {
 		);
 
 		if ( ! $existing ) {
-			$data['sync_status'] = 'pending';
+			$data['sync_status'] = $is_active ? 'pending' : 'ignored';
 			$wpdb->insert( $table, $data );
-			return 'created';
+			return $is_active ? 'created' : 'ignored';
 		}
 
-		if ( $changed || $target_missing ) {
+		if ( ! $is_active ) {
+			$data['sync_status']  = 'ignored';
+			$data['last_error']   = null;
+			$data['queue_run_id'] = null;
+			$data['queue_status'] = null;
+			$wpdb->update( $table, $data, array( 'id' => (int) $existing['id'] ) );
+			return 'ignored';
+		}
+
+		if ( 'ignored' === $existing['sync_status'] || $changed || $target_missing ) {
 			$data['sync_status'] = 'pending';
 			$data['last_error']  = null;
 			if ( $target_missing ) {
@@ -47,7 +101,7 @@ class Cunchici_Abit_Sync_Repository {
 			}
 		}
 		$wpdb->update( $table, $data, array( 'id' => (int) $existing['id'] ) );
-		return ( $changed || $target_missing ) ? 'changed' : 'unchanged';
+		return ( 'ignored' === $existing['sync_status'] || $changed || $target_missing ) ? 'changed' : 'unchanged';
 	}
 
 	public function list_candidates( array $filters = array(), $page = 1, $per_page = 30 ) {
@@ -80,14 +134,14 @@ class Cunchici_Abit_Sync_Repository {
 	public function categories() {
 		global $wpdb;
 		$table = Cunchici_Abit_DB::items_table();
-		return $wpdb->get_col( "SELECT DISTINCT category_label FROM {$table} WHERE category_label <> '' ORDER BY category_label ASC LIMIT 500" );
+		return $wpdb->get_col( "SELECT DISTINCT category_label FROM {$table} WHERE category_label <> '' AND sync_status <> 'ignored' ORDER BY category_label ASC LIMIT 500" );
 	}
 
 	public function status_counts() {
 		global $wpdb;
 		$table = Cunchici_Abit_DB::items_table();
 		$rows  = $wpdb->get_results( "SELECT sync_status, COUNT(*) AS total FROM {$table} GROUP BY sync_status", ARRAY_A );
-		$out   = array( 'pending' => 0, 'synced' => 0, 'error' => 0 );
+		$out   = array( 'pending' => 0, 'synced' => 0, 'error' => 0, 'ignored' => 0 );
 		foreach ( $rows as $row ) {
 			$out[ $row['sync_status'] ] = (int) $row['total'];
 		}
@@ -124,7 +178,7 @@ class Cunchici_Abit_Sync_Repository {
 			foreach ( array_chunk( $selected_ids, 200 ) as $chunk ) {
 				$placeholders = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
 				$args = array_merge( array( $run_id ), $chunk );
-				$wpdb->query( $wpdb->prepare( "UPDATE {$items} SET queue_run_id = %d, queue_status = 'queued' WHERE id IN ({$placeholders})", $args ) );
+				$wpdb->query( $wpdb->prepare( "UPDATE {$items} SET queue_run_id = %d, queue_status = 'queued' WHERE sync_status <> 'ignored' AND id IN ({$placeholders})", $args ) );
 			}
 		} else {
 			$params = array();
@@ -134,7 +188,7 @@ class Cunchici_Abit_Sync_Repository {
 			$wpdb->query( $wpdb->prepare( $sql, $args ) );
 		}
 
-		$total = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$items} WHERE queue_run_id = %d AND queue_status = 'queued'", $run_id ) );
+		$total = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$items} WHERE queue_run_id = %d AND queue_status = 'queued' AND sync_status <> 'ignored'", $run_id ) );
 		$wpdb->update( $runs, array( 'total' => $total ), array( 'id' => $run_id ) );
 
 		if ( 0 === $total ) {
@@ -166,7 +220,7 @@ class Cunchici_Abit_Sync_Repository {
 	public function next_queued_item( $run_id ) {
 		global $wpdb;
 		$table = Cunchici_Abit_DB::items_table();
-		return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE queue_run_id = %d AND queue_status = 'queued' ORDER BY id ASC LIMIT 1", absint( $run_id ) ), ARRAY_A );
+		return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE queue_run_id = %d AND queue_status = 'queued' AND sync_status <> 'ignored' ORDER BY id ASC LIMIT 1", absint( $run_id ) ), ARRAY_A );
 	}
 
 	/**
@@ -230,7 +284,7 @@ class Cunchici_Abit_Sync_Repository {
 	public function mark_completed_if_done( $run_id ) {
 		global $wpdb;
 		$items     = Cunchici_Abit_DB::items_table();
-		$remaining = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$items} WHERE queue_run_id = %d AND queue_status = 'queued'", absint( $run_id ) ) );
+		$remaining = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$items} WHERE queue_run_id = %d AND queue_status = 'queued' AND sync_status <> 'ignored'", absint( $run_id ) ) );
 		if ( 0 === $remaining ) {
 			$run = $this->get_run( $run_id );
 			if ( $run && 'cancelled' !== $run['status'] ) {
@@ -246,11 +300,18 @@ class Cunchici_Abit_Sync_Repository {
 	}
 
 	private function build_where( array $filters, array &$params ) {
-		$where = array( '1=1' );
-		if ( ! empty( $filters['status'] ) && in_array( $filters['status'], array( 'pending', 'synced', 'error' ), true ) ) {
+		$where  = array();
+		$status = isset( $filters['status'] ) ? $filters['status'] : '';
+
+		if ( $status && in_array( $status, array( 'pending', 'synced', 'error', 'ignored' ), true ) ) {
 			$where[]  = 'sync_status = %s';
-			$params[] = $filters['status'];
+			$params[] = $status;
+		} else {
+			// "All" in the normal Sync Center means all syncable products. Inactive
+			// Abit rows are retained for audit but never enter a normal sync run.
+			$where[] = "sync_status <> 'ignored'";
 		}
+
 		if ( ! empty( $filters['category'] ) ) {
 			$where[]  = 'category_label = %s';
 			$params[] = sanitize_text_field( $filters['category'] );
