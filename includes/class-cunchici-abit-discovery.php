@@ -89,7 +89,12 @@ class Cunchici_Abit_Discovery {
 			return new WP_Error( 'cunchici_abit_no_discovery', 'Không có lần quét nào để tiếp tục.' );
 		}
 
+		// Persist running before the network request. This makes Resume from a
+		// paused state explicit and allows another AJAX request to set paused or
+		// cancelled while this page is in flight.
 		$state['status'] = 'running';
+		update_option( self::STATE_OPTION, $state, false );
+
 		$response = $this->api->list_products(
 			isset( $state['page'] ) ? (int) $state['page'] : 0,
 			isset( $state['limit'] ) ? (int) $state['limit'] : 100,
@@ -117,9 +122,20 @@ class Cunchici_Abit_Discovery {
 		$state['last_error'] = '';
 		$has_more = count( $rows ) >= (int) $state['limit'];
 
-		if ( $has_more ) {
+		// Re-read only the control status. Pause/Cancel may have been requested
+		// while the Abit request above was running.
+		$control        = $this->state();
+		$control_status = isset( $control['status'] ) ? $control['status'] : 'running';
+
+		if ( 'cancelled' === $control_status ) {
+			$state['status']      = 'cancelled';
+			$state['finished_at'] = current_time( 'mysql' );
+			if ( $has_more ) {
+				$state['page'] = (int) $state['page'] + 1;
+			}
+		} elseif ( $has_more ) {
 			$state['page']   = (int) $state['page'] + 1;
-			$state['status'] = 'running';
+			$state['status'] = 'paused' === $control_status ? 'paused' : 'running';
 		} else {
 			$state['status']      = 'completed';
 			$state['finished_at'] = current_time( 'mysql' );
@@ -128,7 +144,7 @@ class Cunchici_Abit_Discovery {
 
 		update_option( self::STATE_OPTION, $state, false );
 		$state['last_page_count'] = count( $rows );
-		$state['has_more']        = $has_more;
+		$state['has_more']        = $has_more && 'cancelled' !== $state['status'];
 		return $state;
 	}
 
