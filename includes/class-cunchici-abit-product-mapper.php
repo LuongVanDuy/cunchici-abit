@@ -6,13 +6,13 @@ class Cunchici_Abit_Product_Mapper {
 	/**
 	 * Normalize one verified Abit listProductsforPartner row.
 	 *
-	 * IMPORTANT:
-	 * The live Cún Chic payload verified on 2026-08-22 does NOT expose separate
-	 * color/size fields in listProductsforPartner. Abit variants are still kept
-	 * as independent rows/simple WooCommerce products, but color/size mapping is
-	 * intentionally left blank until the actual source fields are confirmed.
+	 * The live payload verified on 2026-08-22 does not expose separate
+	 * color/size fields. Abit variants remain independent simple products, but
+	 * color/size are intentionally not guessed from name/SKU.
 	 */
 	public static function map( array $row ) {
+		$category = isset( $row['productcategory'] ) ? $row['productcategory'] : null;
+
 		return array(
 			'abit_product_id'  => isset( $row['productid'] ) ? (string) $row['productid'] : '',
 			'sku'              => isset( $row['productcode'] ) ? (string) $row['productcode'] : '',
@@ -28,7 +28,8 @@ class Cunchici_Abit_Product_Mapper {
 			'barcode'          => isset( $row['barcode'] ) ? (string) $row['barcode'] : '',
 			'original_code'    => isset( $row['ma_goc'] ) ? (string) $row['ma_goc'] : '',
 			'accounting_code'  => isset( $row['ma_ke_toan'] ) ? (string) $row['ma_ke_toan'] : '',
-			'category'         => isset( $row['productcategory'] ) ? $row['productcategory'] : null,
+			'category'         => $category,
+			'category_label'   => self::category_label( $category ),
 			'modified_time'    => isset( $row['modifiedtime'] ) ? (string) $row['modifiedtime'] : '',
 			'status'           => isset( $row['status'] ) ? $row['status'] : null,
 			'images'           => self::images( $row ),
@@ -37,15 +38,56 @@ class Cunchici_Abit_Product_Mapper {
 	}
 
 	/**
-	 * Stock field is intentionally NOT guessed.
-	 *
-	 * The listProductsforPartner payload only contains tonkho_toithieu and
-	 * tonkho_toida, which are min/max thresholds rather than current quantity.
-	 * We will enable this method after capturing one real row from
-	 * listProductsWithStockforPartner.
+	 * Current-stock field is intentionally not guessed until a real
+	 * listProductsWithStockforPartner row is captured from the shop.
 	 */
 	public static function stock_quantity( array $row ) {
 		return null;
+	}
+
+	public static function category_names( $value ) {
+		$names = array();
+
+		if ( is_string( $value ) ) {
+			$trimmed = trim( $value );
+			if ( '' === $trimmed ) {
+				return array();
+			}
+			$decoded = json_decode( $trimmed, true );
+			if ( JSON_ERROR_NONE === json_last_error() && is_array( $decoded ) ) {
+				return self::category_names( $decoded );
+			}
+			return array( $trimmed );
+		}
+
+		if ( is_numeric( $value ) ) {
+			return array();
+		}
+
+		if ( is_array( $value ) ) {
+			foreach ( array( 'categoryname', 'productcategoryname', 'name', 'title', 'label' ) as $key ) {
+				if ( isset( $value[ $key ] ) && is_scalar( $value[ $key ] ) && '' !== trim( (string) $value[ $key ] ) ) {
+					$names[] = trim( (string) $value[ $key ] );
+				}
+			}
+
+			if ( ! $names ) {
+				foreach ( $value as $child ) {
+					if ( is_array( $child ) || is_string( $child ) ) {
+						$names = array_merge( $names, self::category_names( $child ) );
+					}
+				}
+			}
+		}
+
+		$names = array_map( 'sanitize_text_field', $names );
+		$names = array_values( array_unique( array_filter( $names ) ) );
+		return $names;
+	}
+
+	private static function category_label( $value ) {
+		$names = self::category_names( $value );
+		return $names ? implode( ' / ', $names ) : '';
 	}
 
 	private static function number( $value ) {
@@ -69,7 +111,6 @@ class Cunchici_Abit_Product_Mapper {
 		if ( is_array( $raw ) ) {
 			foreach ( $raw as $image ) {
 				$url = '';
-
 				if ( is_string( $image ) ) {
 					$url = $image;
 				} elseif ( is_array( $image ) ) {
@@ -80,7 +121,6 @@ class Cunchici_Abit_Product_Mapper {
 						}
 					}
 				}
-
 				$url = esc_url_raw( $url );
 				if ( $url ) {
 					$images[] = $url;
