@@ -75,6 +75,7 @@ class Cunchici_Abit_Discovery {
 			'created'      => 0,
 			'changed'      => 0,
 			'unchanged'    => 0,
+			'ignored'      => 0,
 			'started_at'   => $now,
 			'finished_at'  => '',
 			'last_error'   => '',
@@ -89,9 +90,10 @@ class Cunchici_Abit_Discovery {
 			return new WP_Error( 'cunchici_abit_no_discovery', 'Không có lần quét nào để tiếp tục.' );
 		}
 
-		// Persist running before the network request. This makes Resume from a
-		// paused state explicit and allows another AJAX request to set paused or
-		// cancelled while this page is in flight.
+		if ( ! isset( $state['ignored'] ) ) {
+			$state['ignored'] = 0;
+		}
+
 		$state['status'] = 'running';
 		update_option( self::STATE_OPTION, $state, false );
 
@@ -122,8 +124,6 @@ class Cunchici_Abit_Discovery {
 		$state['last_error'] = '';
 		$has_more = count( $rows ) >= (int) $state['limit'];
 
-		// Re-read only the control status. Pause/Cancel may have been requested
-		// while the Abit request above was running.
 		$control        = $this->state();
 		$control_status = isset( $control['status'] ) ? $control['status'] : 'running';
 
