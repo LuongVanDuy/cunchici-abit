@@ -21,8 +21,8 @@ class Cunchici_Abit_Product_Mapper {
 			'daily_price'       => self::number( isset( $row['gia_daily'] ) ? $row['gia_daily'] : 0 ),
 			'color'             => '',
 			'size'              => '',
-			'description'       => isset( $row['description'] ) ? (string) $row['description'] : '',
-			'short_description' => isset( $row['short_description'] ) ? (string) $row['short_description'] : '',
+			'description'       => self::rich_text( isset( $row['description'] ) ? $row['description'] : '' ),
+			'short_description' => self::rich_text( isset( $row['short_description'] ) ? $row['short_description'] : '' ),
 			'brand'             => isset( $row['brandname'] ) ? (string) $row['brandname'] : '',
 			'brand_id'          => isset( $row['brandid'] ) ? (string) $row['brandid'] : '',
 			'barcode'           => isset( $row['barcode'] ) ? (string) $row['barcode'] : '',
@@ -77,7 +77,6 @@ class Cunchici_Abit_Product_Mapper {
 						$names = array_merge( $names, self::category_names( $child ) );
 					}
 				}
-			}
 		}
 
 		$names = array_map( 'sanitize_text_field', $names );
@@ -97,6 +96,25 @@ class Cunchici_Abit_Product_Mapper {
 
 		$value = preg_replace( '/[^0-9.\-]/', '', (string) $value );
 		return is_numeric( $value ) ? (float) $value : 0.0;
+	}
+
+	/**
+	 * Abit mixes existing HTML with plain text containing CR/LF. Live probing
+	 * found 1,899 active products with newline characters but no <br> tags. A
+	 * raw newline is not a visible HTML line break, so normalize CR/LF and let
+	 * WordPress create paragraphs/line breaks while preserving safe source HTML.
+	 */
+	private static function rich_text( $value ) {
+		$text = is_scalar( $value ) ? (string) $value : '';
+		if ( '' === trim( $text ) ) {
+			return '';
+		}
+
+		$text = str_replace( array( "\r\n", "\r" ), "\n", $text );
+		$text = preg_replace( "/\n{3,}/", "\n\n", $text );
+		$text = wp_kses_post( $text );
+
+		return wpautop( $text );
 	}
 
 	/**
