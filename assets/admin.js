@@ -32,8 +32,7 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
   function formatPrice(value) {
-    const number = Number(value || 0);
-    return new Intl.NumberFormat('vi-VN').format(number) + ' ₫';
+    return new Intl.NumberFormat('vi-VN').format(Number(value || 0)) + ' ₫';
   }
   function statusLabel(status) {
     return { pending: 'Chờ đồng bộ', synced: 'Đã đồng bộ', error: 'Lỗi' }[status] || status || '—';
@@ -49,8 +48,11 @@
       button.disabled = false;
     }
   }
+  function productText(product) {
+    if (!product) return '';
+    return (product.sku ? product.sku + ' — ' : '') + (product.name || 'Sản phẩm');
+  }
 
-  // Settings diagnostic.
   const testButton = $('ccabit-test-connection');
   if (testButton) {
     testButton.addEventListener('click', async () => {
@@ -78,7 +80,6 @@
   let discoveryLoop = false;
   let runLoop = false;
   let currentRun = null;
-  let lastFilters = { search: '', status: 'pending', category: '' };
 
   function filters() {
     return {
@@ -123,8 +124,7 @@
         '<td>' + escapeHtml(formatPrice(row.price)) + '</td>' +
         '<td>' + escapeHtml(row.modified_time || row.created_time || '—') + '</td>' +
         '<td><span class="ccabit-status ccabit-status-' + escapeHtml(row.sync_status) + '">' + escapeHtml(statusLabel(row.sync_status)) + '</span></td>' +
-        '<td>' + error + '</td>' +
-      '</tr>';
+        '<td>' + error + '</td></tr>';
     }).join('');
 
     tbody.querySelectorAll('.ccabit-row-check').forEach((checkbox) => {
@@ -145,7 +145,6 @@
   async function loadCandidates(page = 1) {
     currentPage = page;
     const f = filters();
-    lastFilters = f;
     try {
       const data = await post('cunchici_abit_candidates', {
         page_num: currentPage,
@@ -161,7 +160,7 @@
       $('ccabit-page-info').textContent = 'Trang ' + Number(data.page || 1) + ' / ' + totalPages;
       $('ccabit-prev-page').disabled = currentPage <= 1;
       $('ccabit-next-page').disabled = currentPage >= totalPages;
-      if (!currentRun && data.open_run) {
+      if (data.open_run && (!currentRun || ['completed', 'cancelled'].includes(currentRun.status))) {
         currentRun = data.open_run;
         renderRun(currentRun);
       }
@@ -192,7 +191,6 @@
     updateSelectedButton();
   });
 
-  // Discovery.
   function discoveryStateFromDom() {
     const node = $('ccabit-discovery-progress');
     try { return JSON.parse(node.dataset.state || '{}') || {}; } catch (e) { return {}; }
@@ -232,7 +230,7 @@
         const data = await post('cunchici_abit_discovery_next');
         renderDiscovery(data.state);
         updateCounts(data.counts || {});
-        if (!data.state.has_more || data.state.status === 'completed') {
+        if (!data.state.has_more || ['completed', 'cancelled'].includes(data.state.status)) {
           discoveryLoop = false;
           await loadCandidates(1);
           break;
@@ -274,21 +272,28 @@
     try { const data = await post('cunchici_abit_discovery_cancel'); renderDiscovery(data.state); } catch (e) { window.alert(e.message); }
   });
 
-  // Sync run.
   function renderRun(run) {
     if (!run) return;
     currentRun = run;
     const total = Number(run.total || 0);
     const processed = Number(run.processed || 0);
-    const percent = total ? Math.min(100, Math.round((processed / total) * 1000) / 10) : 100;
+    const percent = run.percent != null ? Number(run.percent) : (total ? Math.min(100, Math.round((processed / total) * 1000) / 10) : 100);
     $('ccabit-run-percent').textContent = percent + '%';
     $('ccabit-run-bar').style.width = percent + '%';
     $('ccabit-run-processed').textContent = processed;
     $('ccabit-run-total').textContent = total;
     $('ccabit-run-success').textContent = Number(run.succeeded || 0);
     $('ccabit-run-failed').textContent = Number(run.failed || 0);
-    $('ccabit-run-current').textContent = run.current_product_name ? 'Đang xử lý: ' + run.current_product_name : 'Trạng thái: ' + (run.status || '—');
-    $('ccabit-run-pause').disabled = run.status !== 'running' && run.status !== 'queued';
+
+    if (run.next_product && ['queued', 'running'].includes(run.status)) {
+      $('ccabit-run-current').textContent = 'Tiếp theo: ' + productText(run.next_product);
+    } else if (run.current_product_name) {
+      $('ccabit-run-current').textContent = 'Đang đồng bộ: ' + run.current_product_name;
+    } else {
+      $('ccabit-run-current').textContent = 'Trạng thái: ' + (run.status || '—');
+    }
+
+    $('ccabit-run-pause').disabled = !['running', 'queued'].includes(run.status);
     $('ccabit-run-resume').disabled = !['paused', 'queued', 'running'].includes(run.status);
     $('ccabit-run-cancel').disabled = ['completed', 'cancelled'].includes(run.status);
   }
@@ -300,7 +305,7 @@
       const row = document.createElement('div');
       row.className = data.error ? 'ccabit-log-row is-error' : 'ccabit-log-row is-success';
       const action = data.error ? 'LỖI' : (data.action === 'created' ? 'TẠO MỚI' : 'CẬP NHẬT');
-      row.textContent = '[' + action + '] ' + (data.product.sku || 'no-sku') + ' — ' + data.product.name + (data.error ? ' — ' + data.error : '');
+      row.textContent = '[' + action + '] ' + productText(data.product) + (data.error ? ' — ' + data.error : '');
       log.prepend(row);
     }
   }
@@ -310,12 +315,18 @@
     runLoop = true;
     try {
       while (runLoop) {
+        if (currentRun.next_product) {
+          $('ccabit-run-current').textContent = 'Đang đồng bộ: ' + productText(currentRun.next_product);
+        } else {
+          $('ccabit-run-current').textContent = 'Đang lấy sản phẩm tiếp theo...';
+        }
+
         const data = await post('cunchici_abit_run_step', { run_id: currentRun.id || currentRun.run_id });
         currentRun = Object.assign({}, currentRun, data);
-        renderStep(data);
-        if (['completed', 'cancelled'].includes(data.status)) {
+        renderStep(currentRun);
+        if (['completed', 'cancelled', 'paused'].includes(currentRun.status)) {
           runLoop = false;
-          selected.clear();
+          if (currentRun.status === 'completed') selected.clear();
           await loadCandidates(currentPage);
           break;
         }
@@ -328,6 +339,11 @@
   }
 
   async function createRun(useSelected) {
+    if (currentRun && ['queued', 'running', 'paused'].includes(currentRun.status)) {
+      window.alert('Đang có phiên đồng bộ #' + (currentRun.id || currentRun.run_id) + ' chưa kết thúc. Hãy Tiếp tục hoặc Hủy phiên đó trước.');
+      return;
+    }
+
     const f = filters();
     const ids = useSelected ? Array.from(selected) : [];
     if (useSelected && ids.length === 0) return;
