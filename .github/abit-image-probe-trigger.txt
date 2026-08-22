@@ -1,0 +1,2 @@
+trigger: 2026-08-22T17:41:00+07:00
+reason: inspect live imagename/default_image payload before implementing WooCommerce image sync
