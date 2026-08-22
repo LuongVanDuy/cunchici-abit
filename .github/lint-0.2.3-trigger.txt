@@ -1,0 +1,1 @@
+Validate PHP and JavaScript syntax for the 0.2.3 image synchronization release.
