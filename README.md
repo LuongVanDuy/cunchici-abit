@@ -138,6 +138,8 @@ Request plugin hỗ trợ:
 
 `date_time_start` và `date_time_end` chỉ gửi khi có giá trị.
 
+**Chưa được coi hai field ngày này là đã xác minh.** Tài liệu public của endpoint hiện chỉ mô tả token, partner, page và limit. Workflow CI `abit-audit.yml` có một capability probe dùng range năm 2099; nếu API vẫn trả sản phẩm thì phải coi date filter là bị ignore và không dùng checkpoint theo ngày để tối ưu discovery.
+
 ### Danh sách kho
 
 ```http
@@ -522,6 +524,14 @@ Style Sync Center.
 
 Lint PHP syntax và JavaScript khi push/PR.
 
+### `.github/workflows/abit-audit.yml`
+
+GitHub Actions audit thật với Abit API. Token chỉ đọc từ repository secret `ABIT_ACCESS_TOKEN`, không hard-code trong Git.
+
+Workflow thống kê total row, unique productid, status, duplicate SKU/productid và test capability của `date_time_start/date_time_end` bằng một range ở tương lai. Kết quả được ghi vào Job Summary và artifact `abit-product-audit`.
+
+Trigger bằng `workflow_dispatch` hoặc push file `.github/abit-audit-trigger.txt`.
+
 ---
 
 ## 14. Safety rules
@@ -536,10 +546,11 @@ Lint PHP syntax và JavaScript khi push/PR.
 8. Không tự đổi product type.
 9. Không đoán current stock.
 10. Không xóa attributes khi source không có color/size.
-11. Không commit Access Token.
+11. Không commit Access Token, kể cả vào GitHub Actions workflow/history.
 12. AJAX phải có nonce.
 13. Admin phải có `manage_woocommerce`.
 14. Khi số lượng API khác admin, chạy audit trước khi thêm filter loại bỏ sản phẩm.
+15. Không dựa vào date filter cho incremental cho tới khi capability probe xác nhận API thực sự áp dụng range.
 
 ---
 
@@ -568,6 +579,8 @@ Mở Sync Center
 → chọn và sync
 ```
 
+Flow hàng ngày chỉ được coi là tối ưu incremental khi date-filter capability đã được xác minh.
+
 ---
 
 ## 16. Checklist trước production full sync
@@ -575,8 +588,10 @@ Mở Sync Center
 - [ ] Plugin version 0.2.1 hoặc mới hơn.
 - [ ] Test connection thành công.
 - [ ] Đối soát API và hiểu rõ total API so với admin Abit.
+- [ ] Chạy CI Abit audit với repository secret, không hard-code token.
 - [ ] `duplicate_productid_groups = 0`.
 - [ ] Xác định có cần loại `status != 1` hay không trước khi sync.
+- [ ] Xác minh `date_filter_likely_supported` trước khi tin vào incremental theo ngày.
 - [ ] Candidate count hợp lý.
 - [ ] Test sync 1 sản phẩm.
 - [ ] Sync lại không duplicate.
@@ -589,6 +604,7 @@ Mở Sync Center
 ## 17. Việc còn lại Phase 1
 
 - [ ] Chạy audit catalog thật và chốt rule `status`.
+- [ ] Xác minh date filter có hoạt động thật hay bị ignore.
 - [ ] Xác minh payload tồn kho.
 - [ ] Map current stock.
 - [ ] Xác định nguồn màu.
@@ -611,6 +627,7 @@ Endpoint / request / date range
 
 Count API khác admin / status / duplicate SKU-ID
 → class-cunchici-abit-audit.php
+→ .github/workflows/abit-audit.yml
 
 Checkpoint / incremental / quét dở
 → class-cunchici-abit-discovery.php
