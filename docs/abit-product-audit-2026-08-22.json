@@ -1,0 +1,24 @@
+{
+  "source": "GitHub Actions live audit against Abit Open API",
+  "workflow_run_id": 32566739552,
+  "partner_name": "tac989",
+  "admin_expected_count": 2579,
+  "api_total_rows": 2624,
+  "api_unique_product_ids": 2624,
+  "difference_unique_vs_admin": 45,
+  "status_counts": {
+    "0": 45,
+    "1": 2579
+  },
+  "duplicate_productid_groups": 0,
+  "duplicate_sku_groups": 0,
+  "empty_productid_rows": 0,
+  "empty_sku_rows": 0,
+  "future_date_probe": {
+    "date_time_start": "2099-01-01 00:00:00",
+    "date_time_end": "2099-01-02 23:59:59",
+    "rows_returned": 0,
+    "date_filter_likely_supported": true
+  },
+  "conclusion": "Abit Admin count matches status=1 exactly. The product list API additionally returns 45 inactive rows with status=0. Inactive rows must be retained only for audit and excluded from normal WooCommerce sync runs."
+}
