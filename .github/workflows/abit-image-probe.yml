@@ -1,0 +1,115 @@
+name: Abit Image Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/abit-image-probe-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ABIT_BASE_URL: https://new.abitstore.vn
+  ABIT_PARTNER_NAME: tac989
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe Abit image fields
+        env:
+          ABIT_ACCESS_TOKEN: ${{ secrets.ABIT_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$ABIT_ACCESS_TOKEN" ]; then
+            echo "Missing repository secret ABIT_ACCESS_TOKEN" >&2
+            exit 1
+          fi
+          echo "::add-mask::$ABIT_ACCESS_TOKEN"
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          endpoint = os.environ['ABIT_BASE_URL'].rstrip('/') + '/products/listProductsforPartner'
+          token = os.environ['ABIT_ACCESS_TOKEN']
+          partner = os.environ['ABIT_PARTNER_NAME']
+
+          def post(page, limit=100):
+              payload = {
+                  'access_token': token,
+                  'partner_name': partner,
+                  'page': page,
+                  'limit': limit,
+              }
+              req = urllib.request.Request(
+                  endpoint,
+                  data=json.dumps(payload).encode('utf-8'),
+                  headers={'Content-Type': 'application/json'},
+                  method='POST',
+              )
+              with urllib.request.urlopen(req, timeout=45) as res:
+                  return json.loads(res.read().decode('utf-8'))
+
+          def rows(data):
+              if isinstance(data, list):
+                  return [x for x in data if isinstance(x, dict)]
+              if isinstance(data, dict):
+                  for key in ('data','products','items','result','list'):
+                      value = data.get(key)
+                      if isinstance(value, list):
+                          return [x for x in value if isinstance(x, dict)]
+                      if isinstance(value, dict):
+                          for nested in ('data','products','items','list'):
+                              v = value.get(nested)
+                              if isinstance(v, list):
+                                  return [x for x in v if isinstance(x, dict)]
+              return []
+
+          samples = []
+          counts = {
+              'active_rows_checked': 0,
+              'imagename_nonempty': 0,
+              'default_image_nonempty': 0,
+              'both_empty': 0,
+          }
+
+          for page in range(0, 27):
+              batch = rows(post(page))
+              for row in batch:
+                  if str(row.get('status')) != '1':
+                      continue
+                  counts['active_rows_checked'] += 1
+                  imagename = row.get('imagename')
+                  default_image = row.get('default_image')
+                  if imagename not in (None, '', [], {}): counts['imagename_nonempty'] += 1
+                  if default_image not in (None, '', [], {}): counts['default_image_nonempty'] += 1
+                  if imagename in (None, '', [], {}) and default_image in (None, '', [], {}): counts['both_empty'] += 1
+                  if len(samples) < 12 and (imagename not in (None, '', [], {}) or default_image not in (None, '', [], {})):
+                      samples.append({
+                          'productid': row.get('productid'),
+                          'productcode': row.get('productcode'),
+                          'productname': row.get('productname'),
+                          'imagename_type': type(imagename).__name__,
+                          'imagename': imagename,
+                          'default_image_type': type(default_image).__name__,
+                          'default_image': default_image,
+                      })
+              if len(batch) < 100:
+                  break
+
+          result = {'counts': counts, 'samples': samples}
+          with open('abit-image-probe.json', 'w', encoding='utf-8') as f:
+              json.dump(result, f, ensure_ascii=False, indent=2)
+          print('IMAGE_PROBE=' + json.dumps(result, ensure_ascii=False))
+          PY
+
+      - name: Upload image probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: abit-image-probe
+          path: abit-image-probe.json
+          retention-days: 7
