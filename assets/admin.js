@@ -35,7 +35,7 @@
     return new Intl.NumberFormat('vi-VN').format(Number(value || 0)) + ' ₫';
   }
   function statusLabel(status) {
-    return { pending: 'Chờ đồng bộ', synced: 'Đã đồng bộ', error: 'Lỗi' }[status] || status || '—';
+    return { pending: 'Chờ đồng bộ', synced: 'Đã đồng bộ', error: 'Lỗi', ignored: 'Bỏ qua / Inactive' }[status] || status || '—';
   }
   function setBusy(button, busy, busyText) {
     if (!button) return;
@@ -210,10 +210,11 @@
     }
     const parts = [
       'Trang API: ' + Number(discoveryState.page || 0),
-      'Đã đọc: ' + Number(discoveryState.fetched || 0),
-      'Mới: ' + Number(discoveryState.created || 0),
+      'API rows: ' + Number(discoveryState.fetched || 0),
+      'Mới active: ' + Number(discoveryState.created || 0),
       'Thay đổi: ' + Number(discoveryState.changed || 0),
-      'Không đổi: ' + Number(discoveryState.unchanged || 0)
+      'Không đổi: ' + Number(discoveryState.unchanged || 0),
+      'Bỏ qua inactive: ' + Number(discoveryState.ignored || 0)
     ];
     if (discoveryState.last_error) parts.push('Lỗi: ' + discoveryState.last_error);
     text.textContent = parts.join(' · ');
