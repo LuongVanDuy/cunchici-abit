@@ -1,0 +1,2 @@
+trigger: 2026-08-22T18:06:00+07:00
+reason: verify Shopee CDN download and Abit description line-break format
