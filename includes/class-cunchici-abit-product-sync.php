@@ -24,8 +24,8 @@ class Cunchici_Abit_Product_Sync {
 			return $product_response;
 		}
 
-		$product_rows = $this->extract_rows( $product_response );
-		$stock_map    = array();
+		$product_rows  = $this->extract_rows( $product_response );
+		$stock_map     = array();
 		$stock_warning = '';
 
 		if ( '' !== trim( (string) $this->settings->get( 'productstoreid', '' ) ) ) {
@@ -45,14 +45,14 @@ class Cunchici_Abit_Product_Sync {
 		}
 
 		$result = array(
-			'page'        => $page,
-			'fetched'     => count( $product_rows ),
-			'created'     => 0,
-			'updated'     => 0,
-			'failed'      => 0,
-			'errors'      => array(),
-			'has_more'    => count( $product_rows ) >= $limit,
-			'next_page'   => $page + 1,
+			'page'          => $page,
+			'fetched'       => count( $product_rows ),
+			'created'       => 0,
+			'updated'       => 0,
+			'failed'        => 0,
+			'errors'        => array(),
+			'has_more'      => count( $product_rows ) >= $limit,
+			'next_page'     => $page + 1,
 			'stock_warning' => $stock_warning,
 		);
 
@@ -72,7 +72,7 @@ class Cunchici_Abit_Product_Sync {
 
 			try {
 				$stock_row = isset( $stock_map[ $id ] ) ? $stock_map[ $id ] : null;
-				$action = $this->upsert( $mapped, $stock_row );
+				$action    = $this->upsert( $mapped, $stock_row );
 				$result[ $action ]++;
 			} catch ( Exception $e ) {
 				$result['failed']++;
@@ -96,7 +96,6 @@ class Cunchici_Abit_Product_Sync {
 			if ( ! $product ) {
 				throw new Exception( 'Không thể load WooCommerce product hiện có.' );
 			}
-			// Abit rows are intentionally represented as simple products.
 			if ( ! $product->is_type( 'simple' ) ) {
 				throw new Exception( 'SKU/Abit ID đang trỏ tới sản phẩm không phải simple; không tự chuyển type để tránh mất dữ liệu.' );
 			}
@@ -118,7 +117,12 @@ class Cunchici_Abit_Product_Sync {
 			}
 		}
 
-		$product->set_attributes( $this->build_attributes( $mapped ) );
+		// Do not call set_attributes([]). The verified list API currently has no
+		// separate color/size keys; overwriting with an empty array would erase
+		// attributes already maintained in WooCommerce.
+		if ( $this->has_mapped_attributes( $mapped ) ) {
+			$product->set_attributes( $this->build_attributes( $mapped ) );
+		}
 
 		if ( is_array( $stock_row ) ) {
 			$quantity = Cunchici_Abit_Product_Mapper::stock_quantity( $stock_row );
@@ -130,21 +134,35 @@ class Cunchici_Abit_Product_Sync {
 		}
 
 		$product_id = $product->save();
+
 		update_post_meta( $product_id, '_cunchici_abit_product_id', sanitize_text_field( $mapped['abit_product_id'] ) );
 		update_post_meta( $product_id, '_cunchici_abit_last_synced_at', current_time( 'mysql', true ) );
+		update_post_meta( $product_id, '_cunchici_abit_modified_time', sanitize_text_field( $mapped['modified_time'] ) );
+
+		if ( '' !== trim( (string) $mapped['barcode'] ) ) {
+			update_post_meta( $product_id, '_cunchici_abit_barcode', sanitize_text_field( $mapped['barcode'] ) );
+		}
+		if ( '' !== trim( (string) $mapped['original_code'] ) ) {
+			update_post_meta( $product_id, '_cunchici_abit_ma_goc', sanitize_text_field( $mapped['original_code'] ) );
+		}
 
 		return $is_new ? 'created' : 'updated';
 	}
 
+	private function has_mapped_attributes( array $mapped ) {
+		return '' !== trim( (string) $mapped['color'] ) || '' !== trim( (string) $mapped['size'] );
+	}
+
 	private function build_attributes( array $mapped ) {
 		$attributes = array();
-		$position = 0;
+		$position   = 0;
 
 		foreach ( array( 'Màu sắc' => $mapped['color'], 'Size' => $mapped['size'] ) as $name => $value ) {
 			$value = trim( (string) $value );
 			if ( '' === $value ) {
 				continue;
 			}
+
 			$attribute = new WC_Product_Attribute();
 			$attribute->set_id( 0 );
 			$attribute->set_name( $name );
@@ -169,9 +187,11 @@ class Cunchici_Abit_Product_Sync {
 				'meta_value'     => sanitize_text_field( $abit_product_id ),
 			)
 		);
+
 		if ( ! empty( $ids ) ) {
 			return (int) $ids[0];
 		}
+
 		return '' !== trim( (string) $sku ) ? (int) wc_get_product_id_by_sku( $sku ) : 0;
 	}
 
@@ -181,13 +201,13 @@ class Cunchici_Abit_Product_Sync {
 				return (string) $row[ $key ];
 			}
 		}
+
 		return '';
 	}
 
 	/**
 	 * Accept common API wrappers without coupling the rest of the plugin to one
-	 * response envelope. Once a real Abit payload is captured this method should
-	 * be tightened and documented in README.md.
+	 * response envelope. The live product list is currently a top-level array.
 	 */
 	private function extract_rows( $response ) {
 		if ( ! is_array( $response ) ) {
@@ -202,9 +222,11 @@ class Cunchici_Abit_Product_Sync {
 			if ( ! isset( $response[ $key ] ) || ! is_array( $response[ $key ] ) ) {
 				continue;
 			}
+
 			if ( $this->is_list_of_rows( $response[ $key ] ) ) {
 				return $response[ $key ];
 			}
+
 			foreach ( array( 'data', 'products', 'items', 'list' ) as $nested ) {
 				if ( isset( $response[ $key ][ $nested ] ) && $this->is_list_of_rows( $response[ $key ][ $nested ] ) ) {
 					return $response[ $key ][ $nested ];
@@ -219,6 +241,7 @@ class Cunchici_Abit_Product_Sync {
 		if ( ! is_array( $value ) || empty( $value ) ) {
 			return false;
 		}
+
 		$first = reset( $value );
 		return is_array( $first );
 	}
