@@ -1,51 +1,52 @@
 # Cún Chic × Abit
 
-Plugin WordPress/WooCommerce dùng để kết nối **cunchici.vn** với **Abit Open API**.
+Plugin WordPress/WooCommerce kết nối **cunchici.vn** với **Abit Open API**.
 
-README này là **bản đồ kỹ thuật trung tâm** của plugin. Mỗi lần thêm/xóa/đổi trách nhiệm file hoặc thay đổi logic đồng bộ phải cập nhật README cùng commit để lần sau chỉ cần đọc file này là biết cần sửa ở đâu.
+README này là bản đồ kỹ thuật trung tâm của plugin. Khi thêm/xóa/đổi trách nhiệm file, endpoint, mapping, DB schema hoặc flow đồng bộ thì phải cập nhật README cùng commit.
 
 ---
 
 ## 1. Version hiện tại
 
 ```text
-0.2.0
+0.2.1
 ```
 
-Version 0.2.0 thay đổi kiến trúc đồng bộ sản phẩm từ kiểu:
+### 0.2.1
+
+Thêm trang **Đối soát API** hoàn toàn read-only để giải quyết trường hợp số lượng sản phẩm API khác số lượng hiển thị trong admin Abit.
+
+Trang đối soát đọc toàn bộ `listProductsforPartner` theo pagination và thống kê:
+
+- tổng số row API;
+- số `productid` unique;
+- số nhóm `productid` trùng;
+- số lượng theo từng `status`;
+- số row `status != 1`;
+- số SKU unique;
+- số nhóm SKU trùng;
+- số sản phẩm SKU rỗng;
+- chênh lệch so với tổng sản phẩm admin Abit do người dùng nhập.
+
+Không lưu Access Token vào source/log và trang audit không ghi WooCommerce.
+
+### 0.2.0
+
+Đổi kiến trúc đồng bộ từ kiểu “bấm Sync rồi ghi thẳng toàn catalog” sang:
 
 ```text
-Bấm Sync
-→ gọi Abit page 0
-→ ghi WooCommerce
-→ page 1
-→ ghi tiếp...
+1. Discovery/Quét Abit
+   ↓
+2. Candidate Queue trong DB plugin
+   ↓
+3. Admin lọc/chọn sản phẩm
+   ↓
+4. Tạo Sync Run
+   ↓
+5. Đồng bộ từng sản phẩm + progress
 ```
 
-sang mô hình an toàn hơn:
-
-```text
-Bước 1: Quét/Discovery Abit
-→ lưu danh sách sản phẩm cần đồng bộ vào DB riêng
-→ KHÔNG ghi WooCommerce
-
-Bước 2: Admin lọc/chọn sản phẩm
-→ tạo một Sync Run
-
-Bước 3: Đồng bộ từng sản phẩm
-→ hiển thị % / sản phẩm / lỗi
-→ có Pause / Resume / Cancel
-```
-
-Mục tiêu chính:
-
-- Không vô tình chạy toàn bộ catalog chỉ bằng một click.
-- Không mất sản phẩm nếu dừng giữa chừng.
-- Hôm sau chỉ quét sản phẩm mới/cập nhật nhưng vẫn giữ các item hôm trước chưa sync.
-- Có danh sách sản phẩm cần đồng bộ trước khi ghi WooCommerce.
-- Có filter, checkbox, danh mục, trạng thái.
-- Có tiến độ chính xác theo từng sản phẩm.
-- Reload trang **không tự chạy tiếp**.
+Reload trang không tự tiếp tục sync. Admin phải chủ động Resume.
 
 ---
 
@@ -53,36 +54,20 @@ Mục tiêu chính:
 
 Abit đang tách biến thể thành các sản phẩm đơn.
 
-Plugin giữ nguyên mô hình:
+Plugin giữ nguyên:
 
 ```text
 1 row Abit
 → 1 WooCommerce simple product
 ```
 
-Không:
-
-- tạo variable product;
-- gom SKU thành parent/variation;
-- tự đoán quan hệ cha/con.
-
-Ví dụ:
-
-```text
-Áo A - Đỏ - S
-Áo A - Đỏ - M
-Áo A - Xanh - S
-```
-
-WooCommerce cũng giữ thành 3 simple products.
+Không tạo variable product, không gom SKU thành parent/variation và không tự đoán quan hệ cha/con.
 
 ---
 
-## 3. Payload sản phẩm đã xác minh
+## 3. Payload list product đã xác minh
 
-API danh sách sản phẩm thật của shop Cún Chic đã được test thành công ngày 2026-08-22.
-
-Các field đã thấy:
+API thật đã thấy các field:
 
 ```text
 productcode
@@ -117,21 +102,14 @@ updated_at
 
 Quan trọng:
 
-- API danh sách hiện **không có field màu riêng**.
-- API danh sách hiện **không có field size riêng**.
-- `tonkho_toithieu` và `tonkho_toida` là ngưỡng min/max, **không phải tồn kho hiện tại**.
-- Không được tự đoán màu/size từ tên hoặc SKU nếu chưa chốt nghiệp vụ.
-- Không được xóa WooCommerce attributes khi Abit không trả màu/size.
+- API list hiện không có field màu riêng.
+- API list hiện không có field size riêng.
+- `tonkho_toithieu` / `tonkho_toida` không được coi là current stock.
+- Không xóa attributes WooCommerce khi source không có màu/size.
 
 ---
 
-## 4. API danh sách sản phẩm
-
-Endpoint:
-
-```http
-POST /products/listProductsforPartner
-```
+## 4. Abit API
 
 Base URL mặc định:
 
@@ -139,7 +117,13 @@ Base URL mặc định:
 https://new.abitstore.vn
 ```
 
-Các field request đang dùng:
+### Danh sách sản phẩm
+
+```http
+POST /products/listProductsforPartner
+```
+
+Request plugin hỗ trợ:
 
 ```json
 {
@@ -152,132 +136,103 @@ Các field request đang dùng:
 }
 ```
 
-`date_time_start` và `date_time_end` là optional trong code.
+`date_time_start` và `date_time_end` chỉ gửi khi có giá trị.
 
-Lần đầu có thể quét toàn bộ mà không gửi date range.
+### Danh sách kho
 
-Các lần incremental sau dùng checkpoint.
+```http
+POST /productstore/getStoreidByPartner
+```
+
+### Sản phẩm + tồn kho
+
+```http
+POST /products/listProductsWithStockforPartner
+```
+
+Cần `productstoreid`.
 
 ---
 
-## 5. Logic incremental sync — phần quan trọng nhất
+## 5. Discovery và incremental sync
 
-Plugin tách riêng hai khái niệm:
+Plugin tách hai khái niệm:
 
 ```text
-DISCOVERY = đã nhìn thấy sản phẩm từ Abit
+DISCOVERY = đã lấy/nhìn thấy sản phẩm từ Abit
 SYNC      = đã ghi sản phẩm đó vào WooCommerce
 ```
 
-Không được dùng “lần cuối sync WooCommerce” làm mốc gọi Abit.
+Không dùng “lần cuối sync WooCommerce” làm checkpoint Abit.
 
-### Ví dụ
-
-Ngày 22/08:
+Ví dụ hôm nay Abit có 500 sản phẩm:
 
 ```text
-Abit có 500 sản phẩm
-Discovery quét đủ 500
-Admin chỉ sync 100
+Discovery đủ 500
+Admin sync 100
+→ 100 synced
+→ 400 pending
 ```
 
-DB plugin lúc này:
+Ngày mai Abit thêm 10:
 
 ```text
-100 synced
-400 pending
+Incremental discovery từ checkpoint cũ đến hiện tại
+→ thêm 10 candidate
+→ 100 synced
+→ 410 pending
 ```
 
-Checkpoint discovery đã hoàn tất ngày 22/08.
+400 sản phẩm cũ chưa sync vẫn còn.
 
-Ngày 23/08 Abit thêm 10 sản phẩm:
+### Checkpoint
+
+Options:
 
 ```text
-Discovery incremental
-→ lấy khoảng thời gian từ checkpoint cũ đến hiện tại
-→ thêm 10 item mới vào queue
+cunchici_abit_discovery_state
+cunchici_abit_discovery_checkpoint_end
 ```
 
-DB plugin trở thành:
+Checkpoint chỉ update sau khi quét hết pagination của range.
 
-```text
-100 synced
-410 pending
-```
+Nếu quét dở/reload/lỗi API thì checkpoint không nhảy lên.
 
-Do đó 400 sản phẩm cũ chưa sync **không bị mất**.
+### Overlap
 
-### Nếu discovery hôm nay chạy dở
-
-Ví dụ:
-
-```text
-Quét được page 0
-Quét được page 1
-Browser reload
-```
-
-Checkpoint **không được cập nhật** vì chưa quét hết range.
-
-State discovery giữ:
-
-```text
-page tiếp theo
-fetched
-created
-changed
-unchanged
-range đang quét
-status paused/running
-```
-
-Admin có thể bấm **Tiếp tục quét**.
-
-### Overlap 5 phút
-
-Sau khi đã có checkpoint, range mặc định bắt đầu:
+Range incremental mặc định bắt đầu:
 
 ```text
 checkpoint - 5 phút
 ```
 
-Mục đích:
-
-- tránh mất record đúng ranh giới thời gian;
-- tránh sai lệch vài giây/phút giữa server;
-- record trùng không sao vì queue upsert bằng `productid`.
+để tránh mất record ở ranh giới thời gian. Candidate upsert bằng `productid` nên overlap không gây duplicate.
 
 ---
 
 ## 6. Candidate Queue
 
-Tất cả sản phẩm Abit đã discovery được lưu vào table:
+Table:
 
 ```text
 {wp_prefix}cunchici_abit_items
 ```
 
-Các trạng thái chính:
+`abit_product_id` có unique index.
+
+Điều này có nghĩa cùng một `productid` không được lưu thành hai candidate khác nhau.
+
+Status:
 
 ```text
-pending = cần đồng bộ hoặc payload đã thay đổi
-synced  = đã đồng bộ thành công
-error   = lần sync gần nhất lỗi
+pending
+synced
+error
 ```
 
-Khi cùng `productid` xuất hiện lại:
+Nếu payload cùng `productid` thay đổi thì sản phẩm quay lại `pending`.
 
-```text
-payload không đổi + đã synced
-→ giữ synced
-
-payload thay đổi
-→ chuyển pending
-```
-
-Đây là cơ chế giúp sản phẩm được chỉnh sửa bên Abit xuất hiện lại trong danh sách cần sync.
-
-### Field chính của table queue
+Field chính:
 
 ```text
 id
@@ -299,45 +254,14 @@ queue_run_id
 queue_status
 ```
 
-`payload` lưu JSON của row Abit để lúc sync không cần gọi lại API list cho từng item.
-
 ---
 
 ## 7. Sync Run
 
-Mỗi lần admin bấm:
-
-```text
-Đồng bộ sản phẩm đã chọn
-```
-
-hoặc:
-
-```text
-Đồng bộ tất cả theo bộ lọc
-```
-
-plugin tạo một run trong:
+Table:
 
 ```text
 {wp_prefix}cunchici_abit_runs
-```
-
-Run có:
-
-```text
-id
-status
-options
-total
-processed
-succeeded
-failed
-current_item_id
-current_product_name
-created_at
-started_at
-finished_at
 ```
 
 Status:
@@ -350,11 +274,9 @@ completed
 cancelled
 ```
 
-### Progress
+Mỗi AJAX xử lý 1 candidate.
 
-Mỗi AJAX request xử lý **1 sản phẩm**.
-
-Do đó phần trăm là chính xác:
+Progress:
 
 ```text
 percent = processed / total * 100
@@ -362,37 +284,23 @@ percent = processed / total * 100
 
 UI hiển thị:
 
-- tổng số sản phẩm;
-- đã xử lý;
-- thành công;
-- lỗi;
+- sản phẩm/SKU đang đồng bộ;
 - %;
-- SKU + tên sản phẩm vừa xử lý;
-- log created / updated / error.
+- processed/total;
+- success;
+- failed;
+- log created/updated/error;
+- Pause / Resume / Cancel.
 
-### Reload trang
+Không cho tạo run thứ hai khi đang có run `queued/running/paused`.
 
-Reload trang:
-
-```text
-KHÔNG tự resume sync
-```
-
-Run vẫn nằm trong DB.
-
-Admin phải chủ động bấm:
-
-```text
-Tiếp tục
-```
-
-Đây là thiết kế an toàn có chủ đích.
+Reload trang không auto resume.
 
 ---
 
-## 8. Filter và chọn sản phẩm
+## 8. Filter / chọn sản phẩm
 
-Trang **Đồng bộ sản phẩm** có filter:
+Sync Center hỗ trợ:
 
 ```text
 Search:
@@ -407,74 +315,49 @@ Status:
 - All
 
 Category:
-- category lấy từ productcategory của Abit
+- category_label từ productcategory Abit
 ```
 
-Admin có thể:
+Có thể:
 
-```text
-checkbox từng sản phẩm
-select all ở page hiện tại
-sync selected
-sync toàn bộ kết quả theo filter
-```
-
-Nếu chọn `All status`, có thể re-sync cả sản phẩm đã synced nên UI sẽ hỏi xác nhận.
+- chọn từng sản phẩm;
+- select all page hiện tại;
+- sync selected;
+- sync tất cả theo filter.
 
 ---
 
 ## 9. Danh mục WooCommerce
 
-Mỗi Sync Run lưu lựa chọn category riêng.
+Sync Run có 3 mode:
 
-Hiện có 3 mode:
+### keep
 
-### `keep`
+Không thay đổi category.
 
-```text
-Không thay đổi danh mục WooCommerce
-```
+### abit
 
-An toàn nhất với sản phẩm đã tồn tại.
+Đọc tên category từ `productcategory`, tạo `product_cat` nếu cần và **append** vào category hiện có.
 
-### `abit`
+### fixed
 
-```text
-Đọc productcategory từ Abit
-→ tạo product_cat nếu chưa có
-→ gán product vào category đó
-```
+Admin chọn một category WooCommerce có sẵn và plugin **append** category đó.
 
-Hiện category được tạo dạng flat terms.
-
-Nếu sau này cần hierarchy chính xác:
-
-```text
-Danh mục cha
-└── Danh mục con
-```
-
-thì sửa parser/category mapping riêng.
-
-### `fixed`
-
-Admin chọn một WooCommerce category có sẵn.
-
-Mọi product trong run được gán vào category đó.
+Plugin không xóa toàn bộ category cũ chỉ vì một lần sync.
 
 ---
 
-## 10. Upsert WooCommerce
+## 10. WooCommerce upsert
 
 Thứ tự tìm product:
 
 ```text
-1. _cunchici_abit_product_id == Abit productid
-2. Nếu chưa có → WooCommerce SKU == Abit productcode
-3. Nếu chưa có → tạo WC_Product_Simple
+1. _cunchici_abit_product_id == productid
+2. fallback WooCommerce SKU == productcode
+3. nếu chưa có → WC_Product_Simple mới
 ```
 
-Sau khi save:
+Meta:
 
 ```text
 _cunchici_abit_product_id
@@ -484,109 +367,94 @@ _cunchici_abit_barcode
 _cunchici_abit_ma_goc
 ```
 
-Không tự chuyển variable/external product sang simple.
+Không tự convert product type.
 
-Nếu Abit ID/SKU đang trỏ tới sản phẩm không phải simple:
-
-```text
-→ đánh error
-→ không phá dữ liệu hiện tại
-```
-
-Nếu SKU đã thuộc product khác:
-
-```text
-→ error
-→ không cưỡng ép duplicate SKU
-```
+SKU đã thuộc product khác → error, không cưỡng ép duplicate SKU.
 
 ---
 
-## 11. Mapping hiện tại
+## 11. Màu / Size / Stock
+
+### Màu / Size
+
+Hiện chưa xác định source field chính xác nên mapper trả rỗng.
+
+Rule an toàn:
+
+```text
+không map được color/size
+→ không gọi set_attributes([])
+→ không xóa attributes đang có
+```
+
+### Stock
+
+Chưa ghi current stock cho tới khi xác minh payload thật từ `listProductsWithStockforPartner`.
+
+Không dùng min/max stock làm current quantity.
+
+---
+
+## 12. Đối soát API — 0.2.1
+
+Menu:
+
+```text
+Cún Chic × Abit
+└── Đối soát API
+```
 
 File:
 
 ```text
-includes/class-cunchici-abit-product-mapper.php
+includes/class-cunchici-abit-audit.php
 ```
 
-Mapping:
+### Mục đích
 
-| Abit | Nội bộ / WooCommerce |
-|---|---|
-| `productid` | External key `_cunchici_abit_product_id` |
-| `productcode` | SKU |
-| `productname` | Product name |
-| `unit_price` | Regular price/current price |
-| `description` | Description |
-| `short_description` | Short description |
-| `productcategory` | Source category/filter/category mapping |
-| `brandname` | Metadata nội bộ mapper |
-| `barcode` | `_cunchici_abit_barcode` |
-| `ma_goc` | `_cunchici_abit_ma_goc` |
-| `modifiedtime` | `_cunchici_abit_modified_time` |
+Khi admin Abit báo một tổng sản phẩm nhưng API/discovery báo một tổng khác, không được đoán hoặc xóa candidate ngay.
 
-### Màu / Size
+Chạy audit để phân biệt:
 
-Hiện:
+1. API thực sự trả nhiều row hơn.
+2. Pagination trả trùng `productid`.
+3. API trả thêm `status != 1`.
+4. Có nhiều productid nhưng trùng SKU.
+5. Có SKU rỗng.
+
+### Cách chạy
+
+1. Vào **Cún Chic × Abit → Đối soát API**.
+2. Nhập số lượng đang thấy trong admin Abit.
+3. Bấm **Chạy đối soát toàn bộ API**.
+4. Plugin đọc page 0, 1, 2... tới cuối.
+5. Không ghi WooCommerce và không thay candidate queue.
+
+Report trả:
 
 ```text
-color = ''
-size = ''
+api_total_rows
+api_unique_product_ids
+admin_expected_count
+difference_unique_vs_admin
+status_counts
+status_not_1
+duplicate_productid_groups
+unique_non_empty_skus
+duplicate_sku_groups
+empty_sku_rows
+conclusion
 ```
 
-Vì payload thật không có field riêng.
-
-Product Sync có rule:
+Nếu:
 
 ```text
-Nếu không map được color/size
-→ KHÔNG call set_attributes([])
-→ không xóa attributes WooCommerce hiện có
+status=1 count == admin count
 ```
 
----
+nhưng unique API lớn hơn admin thì khả năng rất cao admin đang chỉ tính nhóm sản phẩm active/đang dùng còn API trả thêm trạng thái khác.
 
-## 12. Tồn kho
-
-API tồn kho:
-
-```http
-POST /products/listProductsWithStockforPartner
-```
-
-với:
-
-```text
-productstoreid
-```
-
-API danh sách kho:
-
-```http
-POST /productstore/getStoreidByPartner
-```
-
-Trang Settings có Diagnostic để xem:
-
-- danh sách store;
-- payload stock sample nếu đã cấu hình `Product Store ID`.
-
-### Trạng thái 0.2.0
-
-Plugin **chưa ghi current stock**.
-
-Lý do:
-
-- chưa có sample thật của `listProductsWithStockforPartner` để xác nhận field số lượng;
-- không dùng `tonkho_toithieu` / `tonkho_toida` làm current stock.
-
-Khi có sample stock thật:
-
-1. sửa `Cunchici_Abit_Product_Mapper::stock_quantity()`;
-2. bổ sung stock option vào Sync Run;
-3. nối stock lookup theo `productid`;
-4. cập nhật README.
+Audit cũng hiện danh sách sample `status != 1` và nhóm SKU trùng.
 
 ---
 
@@ -594,29 +462,11 @@ Khi có sample stock thật:
 
 ### `cunchici-abit.php`
 
-Bootstrap plugin.
-
-Trách nhiệm:
-
-- version;
-- constants;
-- require class;
-- install/upgrade DB schema;
-- dependency wiring.
-
-Sửa khi:
-
-- thêm class/service cấp cao;
-- bump version;
-- đổi bootstrap.
-
----
+Bootstrap, version, require class, dependency wiring, activation hook.
 
 ### `includes/class-cunchici-abit-settings.php`
 
-Settings.
-
-Trách nhiệm:
+Cấu hình:
 
 ```text
 base_url
@@ -626,388 +476,185 @@ productstoreid
 sync_limit
 ```
 
-Sửa khi thêm cấu hình mới.
-
----
-
 ### `includes/class-cunchici-abit-db.php`
 
-Database schema plugin.
-
-Trách nhiệm:
-
-- table candidate queue;
-- table sync runs;
-- schema version;
-- dbDelta migration.
-
-Sửa khi thêm field/table/index.
-
----
+Schema `items` + `runs`; unique/index; migration bằng `dbDelta`.
 
 ### `includes/class-cunchici-abit-api.php`
 
-Abit HTTP client.
-
-Trách nhiệm:
-
-- POST JSON;
-- token/partner;
-- list products;
-- date range;
-- list stores;
-- list products with stock.
-
-Nếu Abit đổi endpoint/request:
-
-```text
-sửa file này
-```
-
----
+HTTP client Abit; list product; date range; list stores; stock API.
 
 ### `includes/class-cunchici-abit-product-mapper.php`
 
-Chuẩn hóa row Abit.
-
-Trách nhiệm:
-
-- ID;
-- SKU;
-- name;
-- price;
-- description;
-- brand/barcode;
-- source category;
-- images normalization;
-- sau này color/size/stock.
-
-Sai field mapping:
-
-```text
-kiểm tra file này đầu tiên
-```
-
----
+Field mapping Abit → internal/WooCommerce.
 
 ### `includes/class-cunchici-abit-sync-repository.php`
 
-Data access layer của Sync Center.
-
-Trách nhiệm:
-
-- upsert candidate;
-- payload hash;
-- pending/synced/error;
-- list/filter candidates;
-- category filter values;
-- tạo sync run;
-- queue product vào run;
-- lấy next item;
-- cập nhật progress/error.
-
-Nếu sai trạng thái queue/run:
-
-```text
-kiểm tra file này
-```
-
----
+Candidate/run DB access; status; filters; queue; progress.
 
 ### `includes/class-cunchici-abit-discovery.php`
 
-Logic quét Abit.
-
-Trách nhiệm:
-
-- initial full discovery;
-- incremental discovery;
-- `date_time_start` / `date_time_end`;
-- pagination;
-- resume discovery;
-- checkpoint;
-- overlap 5 phút;
-- ghi candidate vào repository.
-
-Nếu lỗi “hôm sau lấy sản phẩm mới”, “resume quét”, “checkpoint”:
-
-```text
-kiểm tra file này
-```
-
----
+Full/incremental discovery; pagination; checkpoint; overlap; Pause/Resume.
 
 ### `includes/class-cunchici-abit-product-sync.php`
 
-Logic ghi WooCommerce.
-
-Trách nhiệm:
-
-- process 1 queued item;
-- simple product upsert;
-- SKU;
-- name;
-- price;
-- descriptions;
-- categories;
-- metadata;
-- progress response;
-- error isolation.
-
-Không gọi trực tiếp full catalog Abit ở class này nữa.
-
----
+Process từng queued product; WooCommerce upsert; category; metadata; error isolation.
 
 ### `includes/class-cunchici-abit-admin.php`
 
-Admin controllers + AJAX.
+Settings + Sync Center + AJAX controllers.
 
-Trách nhiệm:
+### `includes/class-cunchici-abit-audit.php`
 
-- menu;
-- Settings UI;
-- Sync Center markup;
-- diagnostic;
-- discovery AJAX;
-- candidates AJAX;
-- run AJAX;
-- enqueue assets.
+Read-only full API reconciliation.
 
-Nếu cần thêm action UI/server endpoint:
-
-```text
-sửa file này
-```
-
----
+Sửa file này khi cần thêm thống kê để giải thích chênh lệch giữa API và admin Abit.
 
 ### `assets/admin.js`
 
-Client-side Sync Center.
-
-Trách nhiệm:
-
-- AJAX helper;
-- load/filter table;
-- checkbox selection;
-- discovery loop;
-- pause/resume/cancel;
-- create sync run;
-- process từng product;
-- progress %;
-- log product/error;
-- không auto resume khi reload.
-
-Nếu giao diện chạy sai flow nhưng PHP backend đúng:
-
-```text
-kiểm tra file này
-```
-
----
+Sync Center UI logic, discovery loop, filters, run progress, Pause/Resume/Cancel.
 
 ### `assets/admin.css`
 
 Style Sync Center.
 
-Trách nhiệm:
+### `.github/workflows/lint.yml`
 
-- dashboard cards;
-- grid;
-- table;
-- badges;
-- progress;
-- log;
-- responsive admin UI.
+Lint PHP syntax và JavaScript khi push/PR.
 
 ---
 
-## 14. Database tables
-
-### `{prefix}cunchici_abit_items`
-
-Candidate/product state.
-
-Unique:
-
-```text
-abit_product_id
-```
-
-### `{prefix}cunchici_abit_runs`
-
-Sync runs.
-
-Không xóa tables khi deactivate plugin.
-
-Mục đích:
-
-- update plugin/deactivate tạm không làm mất queue/history đang dùng.
-
-Nếu sau này viết uninstall cleanup phải làm file riêng và xác nhận trước vì đây là dữ liệu vận hành.
-
----
-
-## 15. Discovery state options
-
-```text
-cunchici_abit_discovery_state
-cunchici_abit_discovery_checkpoint_end
-```
-
-`discovery_state` lưu progress của lần quét đang/dở.
-
-`checkpoint_end` chỉ cập nhật khi range được quét hết pagination.
-
----
-
-## 16. Safety rules
-
-Bắt buộc giữ các rule sau:
+## 14. Safety rules
 
 1. Discovery không ghi WooCommerce.
-2. Sync chỉ chạy sau khi đã có candidate list.
-3. Reload không auto resume.
-4. Checkpoint không update khi discovery dở.
-5. Product lỗi không làm dừng toàn run.
-6. Không xóa product khi Abit không trả về.
-7. Không đổi product type tự động.
-8. Không đoán current stock.
-9. Không xóa attributes nếu source không có color/size.
-10. Không commit Access Token.
-11. AJAX phải có nonce.
-12. Admin phải có `manage_woocommerce`.
+2. Audit không ghi WooCommerce và không sửa queue.
+3. Sync chỉ chạy từ candidate đã chọn/filter.
+4. Reload không auto resume.
+5. Checkpoint không update khi discovery chưa hoàn tất.
+6. Product lỗi không dừng toàn run.
+7. Không xóa product khi Abit không trả về.
+8. Không tự đổi product type.
+9. Không đoán current stock.
+10. Không xóa attributes khi source không có color/size.
+11. Không commit Access Token.
+12. AJAX phải có nonce.
+13. Admin phải có `manage_woocommerce`.
+14. Khi số lượng API khác admin, chạy audit trước khi thêm filter loại bỏ sản phẩm.
 
 ---
 
-## 17. Flow vận hành đề xuất
+## 15. Flow vận hành
 
 ### Lần đầu
 
 ```text
 Cấu hình token/partner
-→ Test connection
+→ Test API
+→ nếu count có nghi vấn: Đối soát API
 → Quét toàn bộ lần đầu
 → xem Candidate List
-→ filter/chọn sản phẩm
-→ chọn category mode
-→ Sync selected hoặc filtered
-→ theo dõi progress
+→ filter/chọn
+→ sync từng nhóm
 ```
 
-### Ngày tiếp theo
+### Hàng ngày
 
 ```text
 Mở Sync Center
-→ range mặc định lấy từ checkpoint
-→ Quét mới / cập nhật
-→ các sản phẩm mới/thay đổi thành pending
-→ pending cũ chưa sync vẫn còn
+→ date range từ checkpoint
+→ Quét mới/cập nhật
+→ sản phẩm mới/thay đổi thành pending
+→ pending cũ vẫn còn
 → chọn và sync
 ```
 
 ---
 
-## 18. Case cần test trước production full sync
+## 16. Checklist trước production full sync
 
-- [ ] Update plugin lên 0.2.0.
-- [ ] DB tables tự tạo thành công.
-- [ ] Settings vẫn giữ token cũ.
+- [ ] Plugin version 0.2.1 hoặc mới hơn.
 - [ ] Test connection thành công.
-- [ ] Quét toàn bộ catalog nhưng không tạo Woo product.
-- [ ] Candidate count đúng.
-- [ ] Filter pending/category/search hoạt động.
-- [ ] Chọn 1 sản phẩm và sync thành công.
-- [ ] Sync lại cùng product không duplicate.
-- [ ] Chọn fixed category hoạt động.
-- [ ] Category mode keep không xóa category hiện có.
-- [ ] Pause run sau vài sản phẩm.
-- [ ] Reload trang không tự chạy.
-- [ ] Resume xử lý phần còn lại.
-- [ ] Product lỗi hiển thị status error + last_error.
-- [ ] Ngày/range incremental tạo thêm candidate mới.
-- [ ] Pending từ ngày cũ vẫn còn.
+- [ ] Đối soát API và hiểu rõ total API so với admin Abit.
+- [ ] `duplicate_productid_groups = 0`.
+- [ ] Xác định có cần loại `status != 1` hay không trước khi sync.
+- [ ] Candidate count hợp lý.
+- [ ] Test sync 1 sản phẩm.
+- [ ] Sync lại không duplicate.
+- [ ] Pause/Reload/Resume đúng.
+- [ ] Category mode không phá category cũ.
+- [ ] Xác minh stock payload trước khi bật stock.
 
 ---
 
-## 19. Việc chưa hoàn tất
+## 17. Việc còn lại Phase 1
 
-### Phase 1 còn lại
-
-- [ ] Xác minh payload tồn kho thật.
+- [ ] Chạy audit catalog thật và chốt rule `status`.
+- [ ] Xác minh payload tồn kho.
 - [ ] Map current stock.
 - [ ] Xác định nguồn màu.
 - [ ] Xác định nguồn size.
-- [ ] Import ảnh vào Media Library nếu cần.
-- [ ] Category hierarchy nếu productcategory có cấu trúc cha/con.
-- [ ] Retry/backoff API 429/5xx.
-- [ ] Sync history detail screen nếu cần audit sâu.
-
-### Sau Phase 1
-
-- [ ] Auto schedule/cron.
-- [ ] Đơn hàng.
-- [ ] Khách hàng.
-- [ ] Trạng thái đơn.
-- [ ] Inventory workflow hai chiều nếu nghiệp vụ yêu cầu.
+- [ ] Import ảnh nếu cần.
+- [ ] Category hierarchy nếu cần.
+- [ ] Retry/backoff 429/5xx.
 
 ---
 
-## 20. Khi cần sửa gì thì vào đâu?
+## 18. Khi cần sửa gì thì vào đâu?
 
 ```text
 Token / Partner / Kho / Limit
 → class-cunchici-abit-settings.php
 → class-cunchici-abit-admin.php
 
-Endpoint / request Abit / date range field
+Endpoint / request / date range
 → class-cunchici-abit-api.php
+
+Count API khác admin / status / duplicate SKU-ID
+→ class-cunchici-abit-audit.php
 
 Checkpoint / incremental / quét dở
 → class-cunchici-abit-discovery.php
 
-Candidate / pending / synced / error / run DB
+Candidate / status / queue / run DB
 → class-cunchici-abit-sync-repository.php
 
 SKU / giá / category / màu / size / stock mapping
 → class-cunchici-abit-product-mapper.php
 
-Create/update WooCommerce / category assignment
+Create/update WooCommerce
 → class-cunchici-abit-product-sync.php
 
-Menu / AJAX / markup
+Menu / AJAX / Sync Center markup
 → class-cunchici-abit-admin.php
 
-Table UI / progress / filter / checkbox / pause-resume
+UI progress/filter/Pause-Resume
 → assets/admin.js
 
-Giao diện
+CSS
 → assets/admin.css
 
 DB schema
 → class-cunchici-abit-db.php
 
-Bootstrap/version/dependency
+Bootstrap/version
 → cunchici-abit.php
 ```
 
 ---
 
-## 21. Quy tắc cập nhật README
+## 19. Quy tắc duy trì README
 
-Mỗi commit phải cập nhật README nếu có một trong các việc:
+README phải cập nhật cùng commit khi:
 
-1. thêm/xóa/đổi tên file;
-2. đổi trách nhiệm class;
-3. thêm endpoint Abit;
-4. đổi mapping;
-5. đổi database schema;
-6. đổi checkpoint/incremental logic;
-7. đổi status queue/run;
-8. đổi admin flow;
-9. đổi safety rule;
-10. đổi product model.
+- thêm/xóa/đổi file;
+- đổi class responsibility;
+- thêm endpoint;
+- đổi mapping;
+- đổi DB schema;
+- đổi checkpoint;
+- đổi queue/run status;
+- đổi admin flow;
+- đổi safety rule;
+- đổi model sản phẩm.
 
-Mục tiêu:
-
-> README phải mô tả **code đang chạy**, không phải ý tưởng dự kiến.
+> README phải mô tả code đang chạy, không mô tả ý tưởng chưa triển khai.
