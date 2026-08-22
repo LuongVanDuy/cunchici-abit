@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Probe Abit image fields
+      - name: Probe Abit image CDN and descriptions
         env:
           ABIT_ACCESS_TOKEN: ${{ secrets.ABIT_ACCESS_TOKEN }}
         run: |
@@ -33,6 +33,7 @@ jobs:
           import json
           import os
           import urllib.request
+          import urllib.error
 
           endpoint = os.environ['ABIT_BASE_URL'].rstrip('/') + '/products/listProductsforPartner'
           token = os.environ['ABIT_ACCESS_TOKEN']
@@ -69,13 +70,73 @@ jobs:
                                   return [x for x in v if isinstance(x, dict)]
               return []
 
-          samples = []
+          def extract_urls(row):
+              urls = []
+              raw = row.get('imagename')
+              if isinstance(raw, str) and raw.strip():
+                  try:
+                      raw = json.loads(raw)
+                  except Exception:
+                      raw = []
+              if isinstance(raw, list):
+                  for item in raw:
+                      if isinstance(item, str) and item.strip():
+                          urls.append(item.strip())
+                      elif isinstance(item, dict):
+                          for key in ('imgSrc','url','src'):
+                              if item.get(key):
+                                  urls.append(str(item[key]).strip())
+                                  break
+              default = row.get('default_image')
+              if default:
+                  urls.insert(0, str(default).strip())
+              out = []
+              for url in urls:
+                  if url and url not in out:
+                      out.append(url)
+              return out
+
+          def probe_url(url):
+              req = urllib.request.Request(
+                  url,
+                  headers={
+                      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+                      'User-Agent': 'CunChic-Abit-CI/1.0',
+                  },
+                  method='GET',
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=45) as res:
+                      body = res.read(256 * 1024)
+                      return {
+                          'ok': True,
+                          'status': res.status,
+                          'final_url': res.geturl(),
+                          'content_type': res.headers.get('Content-Type'),
+                          'content_length': res.headers.get('Content-Length'),
+                          'bytes_read': len(body),
+                          'magic_hex': body[:16].hex(),
+                      }
+              except Exception as exc:
+                  return {'ok': False, 'error': type(exc).__name__ + ': ' + str(exc)}
+
           counts = {
               'active_rows_checked': 0,
               'imagename_nonempty': 0,
               'default_image_nonempty': 0,
               'both_empty': 0,
+              'description_nonempty': 0,
+              'description_has_newline': 0,
+              'description_has_br': 0,
+              'description_has_p': 0,
+              'short_description_nonempty': 0,
+              'short_description_has_newline': 0,
+              'short_description_has_br': 0,
+              'short_description_has_p': 0,
           }
+          image_samples = []
+          description_samples = []
+          image_urls_for_network = []
 
           for page in range(0, 27):
               batch = rows(post(page))
@@ -88,23 +149,53 @@ jobs:
                   if imagename not in (None, '', [], {}): counts['imagename_nonempty'] += 1
                   if default_image not in (None, '', [], {}): counts['default_image_nonempty'] += 1
                   if imagename in (None, '', [], {}) and default_image in (None, '', [], {}): counts['both_empty'] += 1
-                  if len(samples) < 12 and (imagename not in (None, '', [], {}) or default_image not in (None, '', [], {})):
-                      samples.append({
+
+                  desc = '' if row.get('description') is None else str(row.get('description'))
+                  short = '' if row.get('short_description') is None else str(row.get('short_description'))
+                  if desc.strip(): counts['description_nonempty'] += 1
+                  if '\n' in desc or '\r' in desc: counts['description_has_newline'] += 1
+                  if '<br' in desc.lower(): counts['description_has_br'] += 1
+                  if '<p' in desc.lower(): counts['description_has_p'] += 1
+                  if short.strip(): counts['short_description_nonempty'] += 1
+                  if '\n' in short or '\r' in short: counts['short_description_has_newline'] += 1
+                  if '<br' in short.lower(): counts['short_description_has_br'] += 1
+                  if '<p' in short.lower(): counts['short_description_has_p'] += 1
+
+                  urls = extract_urls(row)
+                  if len(image_samples) < 8 and urls:
+                      image_samples.append({
                           'productid': row.get('productid'),
                           'productcode': row.get('productcode'),
-                          'productname': row.get('productname'),
-                          'imagename_type': type(imagename).__name__,
-                          'imagename': imagename,
-                          'default_image_type': type(default_image).__name__,
-                          'default_image': default_image,
+                          'url_count': len(urls),
+                          'first_url': urls[0],
+                      })
+                  for url in urls:
+                      if url not in image_urls_for_network and len(image_urls_for_network) < 3:
+                          image_urls_for_network.append(url)
+
+                  if len(description_samples) < 8 and (desc.strip() or short.strip()):
+                      description_samples.append({
+                          'productid': row.get('productid'),
+                          'productcode': row.get('productcode'),
+                          'description_len': len(desc),
+                          'description_preview_repr': repr(desc[:350]),
+                          'short_description_len': len(short),
+                          'short_description_preview_repr': repr(short[:350]),
                       })
               if len(batch) < 100:
                   break
 
-          result = {'counts': counts, 'samples': samples}
+          network = [{'url': url, 'probe': probe_url(url)} for url in image_urls_for_network]
+          result = {
+              'counts': counts,
+              'image_samples': image_samples,
+              'network_probe': network,
+              'description_samples': description_samples,
+          }
           with open('abit-image-probe.json', 'w', encoding='utf-8') as f:
               json.dump(result, f, ensure_ascii=False, indent=2)
-          print('IMAGE_PROBE=' + json.dumps(result, ensure_ascii=False))
+          print('PROBE_SUMMARY=' + json.dumps({'counts': counts, 'network_probe': network}, ensure_ascii=False))
+          print('DESCRIPTION_SAMPLES=' + json.dumps(description_samples, ensure_ascii=False))
           PY
 
       - name: Upload image probe
