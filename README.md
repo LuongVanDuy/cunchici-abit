@@ -2,32 +2,34 @@
 
 Plugin WordPress/WooCommerce dùng để kết nối **cunchici.vn** với **Abit Open API**.
 
-README này là **bản đồ kỹ thuật trung tâm** của plugin. Mỗi lần thêm/xóa/đổi trách nhiệm file hoặc thay đổi logic đồng bộ phải cập nhật README cùng commit để lần sau chỉ cần đọc tài liệu này là biết cần sửa ở đâu.
+README này là **bản đồ kỹ thuật trung tâm** của plugin. Mỗi lần thêm/xóa/đổi trách nhiệm file hoặc thay đổi logic đồng bộ phải cập nhật README cùng commit.
 
 ---
 
 ## 1. Trạng thái hiện tại
 
-Version khởi tạo: `0.1.0`.
+Version hiện tại: `0.1.1`.
 
-Đã triển khai khung Phase 1:
+### Trạng thái an toàn
 
-- Menu quản trị **Cún Chic × Abit**.
-- Trang **Cấu hình**.
-- Lưu Abit Base URL, Access Token, Partner Name/Mã shop, Product Store ID và limit.
-- Nút **Test kết nối Abit**.
-- Trang **Đồng bộ sản phẩm**.
-- Gọi API danh sách sản phẩm theo pagination.
-- Upsert WooCommerce product bằng Abit Product ID, fallback theo SKU.
-- Mỗi dòng sản phẩm Abit luôn được lưu thành **WooCommerce simple product**.
-- Không tạo variable product và không gom biến thể.
-- Đồng bộ SKU, tên, giá, màu, size.
-- Có khung gọi API tồn kho theo kho Abit.
-- Có log created / updated / failed trên màn hình sync.
+**FULL PRODUCT SYNC ĐANG TẠM KHÓA.**
 
-### Quy tắc nghiệp vụ đã chốt
+Lý do:
 
-Abit đang tách các sản phẩm có biến thể thành từng sản phẩm đơn. Vì vậy plugin cũng giữ nguyên mô hình đó:
+- API danh sách sản phẩm thật của shop đã được xác minh.
+- Response không có field màu/size riêng.
+- Chưa xác minh field số lượng tồn kho thật từ endpoint tồn kho.
+- Một lần sync thử đã vô tình được kích hoạt trước khi mapping hoàn chỉnh.
+
+Bản `0.1.1` khóa cả nút UI lẫn AJAX endpoint sync. Endpoint trả HTTP `423` nếu có request ghi dữ liệu.
+
+Nút **Test kết nối Abit** chỉ đọc dữ liệu diagnostic và không ghi WooCommerce.
+
+---
+
+## 2. Quy tắc nghiệp vụ đã chốt
+
+Abit đang tách biến thể thành các sản phẩm đơn. Plugin giữ nguyên mô hình này:
 
 ```text
 1 dòng sản phẩm Abit
@@ -35,27 +37,20 @@ Abit đang tách các sản phẩm có biến thể thành từng sản phẩm �
 1 WooCommerce simple product
 ```
 
-Ví dụ Abit có:
+Không tạo variable product.
+Không gom các SKU thành sản phẩm cha/con.
+
+Ví dụ:
 
 ```text
-Áo A - Đỏ - S
-Áo A - Đỏ - M
-Áo A - Xanh - S
+Áo A - Đỏ - S  -> simple product
+Áo A - Đỏ - M  -> simple product
+Áo A - Xanh - S -> simple product
 ```
-
-WooCommerce cũng sẽ có 3 simple products riêng, **không tạo 1 variable product cha**.
-
-Màu và Size được lưu dưới dạng custom product attributes, chỉ dùng để hiển thị/tham chiếu, `variation = false`.
 
 ---
 
-## 2. API Abit đang sử dụng
-
-Tài liệu chính thức:
-
-- Tổng quan: https://apidocs.abit.vn/
-- Danh sách sản phẩm: https://apidocs.abit.vn/san-pham/danh-sach-san-pham
-- Danh sách sản phẩm tồn kho: https://apidocs.abit.vn/san-pham/danh-sach-san-pham-ton-kho
+## 3. API Abit
 
 Base URL mặc định:
 
@@ -81,30 +76,118 @@ Payload:
 }
 ```
 
-Plugin bắt đầu pagination từ `page = 0`.
+Response thật của shop hiện là **top-level array**.
 
-### Danh sách sản phẩm có tồn kho
+Các key đã xác minh trên một sản phẩm thật:
+
+```text
+productcode
+productname
+alias
+usageunit
+gia_daily
+unit_price
+imagename
+productid
+weight
+taxpercentage
+vitri
+inventorytype
+createdtime
+modifiedtime
+status
+tonkho_toithieu
+tonkho_toida
+default_image
+short_description
+description
+productcategory
+brandid
+brandname
+ma_ke_toan
+ma_goc
+barcode
+created_at
+updated_at
+```
+
+### Kết luận từ payload thật
+
+Có thể chốt ngay:
+
+| Abit | Ý nghĩa/plugin |
+|---|---|
+| `productid` | External ID chính |
+| `productcode` | SKU |
+| `productname` | Tên sản phẩm |
+| `unit_price` | Giá hiện dùng để map WooCommerce |
+| `gia_daily` | Giá phụ, đang chỉ normalize để tham chiếu |
+| `description` | Mô tả |
+| `short_description` | Mô tả ngắn |
+| `brandname` | Tên thương hiệu |
+| `brandid` | ID thương hiệu Abit |
+| `barcode` | Barcode |
+| `ma_goc` | Mã gốc |
+| `modifiedtime` | Thời gian sửa tại Abit |
+| `imagename` | Danh sách ảnh dạng JSON/string |
+| `default_image` | Ảnh mặc định |
+
+### Chưa được phép suy đoán
+
+Response trên **không có field màu/size riêng**.
+
+Do đó mapper `0.1.1` cố ý trả:
+
+```text
+color = ""
+size = ""
+```
+
+và sync service không được phép xóa attributes WooCommerce khi chưa có mapping thật.
+
+`tonkho_toithieu` và `tonkho_toida` là ngưỡng tồn kho tối thiểu/tối đa, **không được dùng làm tồn kho hiện tại**.
+
+---
+
+## 4. API kho và tồn kho
+
+### Danh sách Kho - Chi nhánh
+
+```http
+POST /productstore/getStoreidByPartner
+```
+
+Plugin `0.1.1` đã có:
+
+```php
+Cunchici_Abit_API::list_stores()
+```
+
+Nút Test sẽ gọi API này để hiển thị danh sách kho thật. Không cần đoán `productstoreid`.
+
+### Sản phẩm có tồn kho
 
 ```http
 POST /products/listProductsWithStockforPartner
-Content-Type: application/json
 ```
 
 Payload bổ sung:
 
 ```json
 {
-  "productstoreid": "..."
+  "productstoreid": 123
 }
 ```
 
-`Product Store ID` được nhập trong màn hình cấu hình plugin.
+Plugin chỉ gọi endpoint này sau khi `Product Store ID` đã được cấu hình.
+
+**Field số lượng tồn kho chưa được xác minh nên `stock_quantity()` hiện trả `null`.**
+
+Điều này cố ý ngăn việc ghi sai stock lên WooCommerce.
 
 ---
 
-## 3. Menu quản trị
-
-Sau khi plugin được cài và kích hoạt:
+## 5. Menu quản trị
 
 ```text
 WP Admin
@@ -113,7 +196,7 @@ WP Admin
     └── Đồng bộ sản phẩm
 ```
 
-Quyền truy cập hiện tại:
+Quyền:
 
 ```text
 manage_woocommerce
@@ -125,145 +208,33 @@ Các field:
 
 | Field | Ý nghĩa |
 |---|---|
-| Abit Base URL | Mặc định `https://new.abitstore.vn` |
-| Access Token | Token do Abit cấp |
-| Partner Name / Mã shop | `partner_name` gửi sang Abit |
-| Product Store ID / Kho Abit | Dùng cho API tồn kho |
-| Sản phẩm mỗi trang | `limit`, hiện giới hạn 1–500 |
+| Abit Base URL | `https://new.abitstore.vn` |
+| Access Token | Token Abit |
+| Partner Name / Mã shop | `partner_name` |
+| Product Store ID | Kho dùng để đọc tồn kho |
+| Sản phẩm mỗi trang | `limit`, 1–500 |
 
-Access Token được lưu trong WordPress options, không nằm trong repository.
-
-**Không commit token thật lên GitHub.**
+Token nằm trong WordPress options, không commit GitHub.
 
 ---
 
-## 4. Luồng đồng bộ hiện tại
+## 6. Test kết nối / Diagnostic
 
-```text
-Admin bấm "Bắt đầu đồng bộ"
-        ↓
-AJAX gọi page = 0
-        ↓
-Abit listProductsforPartner
-        ↓
-Product Mapper
-        ↓
-Tìm WooCommerce product
-        ↓
-_cunchici_abit_product_id có rồi?
-    ↓ Có               ↓ Không
- Update          thử tìm bằng SKU
-                         ↓
-                   Có → Update
-                   Không → Create
-        ↓
-WC_Product_Simple
-        ↓
-Lưu Abit Product ID + last synced time
-        ↓
-page++
-        ↓
-Lặp đến khi số item < limit
-```
+Bản `0.1.1` nâng nút **Test kết nối Abit** thành diagnostic.
 
-Frontend admin gọi từng page riêng thay vì một request PHP cực dài để giảm nguy cơ timeout.
+Nút test dự kiến đọc:
 
-Có bảo vệ tối đa `5000` trang.
+1. `listProductsforPartner` với `page=0`, `limit=1`.
+2. Danh sách kho qua `getStoreidByPartner`.
+3. Nếu đã có `productstoreid`, lấy 1 record từ `listProductsWithStockforPartner`.
 
----
+Không có bước ghi dữ liệu WooCommerce.
 
-## 5. Mapping sản phẩm
+Mục tiêu diagnostic tiếp theo:
 
-Mapping hiện tại nằm tại:
-
-```text
-includes/class-cunchici-abit-product-mapper.php
-```
-
-### Mapping chính
-
-| Abit | WooCommerce |
-|---|---|
-| `productid` | post meta `_cunchici_abit_product_id` |
-| `productcode` | SKU |
-| `productname` | Product name |
-| `unit_price` | Regular price + current price |
-| màu | Custom attribute `Màu sắc` |
-| size | Custom attribute `Size` |
-| `description` | Description |
-| `short_description` | Short description |
-
-Giá fallback hiện tại:
-
-```text
-unit_price
-→ price
-→ gia_daily
-```
-
-Nếu nghiệp vụ của Cún Chic yêu cầu dùng giá khác, sửa tại mapper.
-
-### Màu và Size
-
-Tài liệu/public response chưa đủ chắc chắn để khóa duy nhất một tên field cho dữ liệu shop thực tế, nên mapper hiện hỗ trợ một số alias thường gặp.
-
-Màu:
-
-```text
-color
-colorname
-mausac
-mau_sac
-productcolor
-```
-
-Size:
-
-```text
-size
-sizename
-kichthuoc
-kich_thuoc
-productsize
-```
-
-**Việc cần làm sau lần Test kết nối đầu tiên:** xem `first_product_keys` do plugin hiển thị, xác định tên field thật của Abit shop và thu hẹp mapper về field chính xác.
-
-Không nên duy trì alias đoán lâu dài nếu payload thật đã xác định được.
-
----
-
-## 6. Tồn kho
-
-Tồn kho nằm ở endpoint riêng có `productstoreid`.
-
-Plugin hiện:
-
-1. Gọi danh sách sản phẩm.
-2. Nếu đã cấu hình Product Store ID, gọi thêm API sản phẩm tồn kho cùng page.
-3. Ghép dữ liệu theo `productid`.
-4. Nếu đọc được số lượng:
-   - `manage_stock = true`
-   - cập nhật `stock_quantity`
-   - `> 0` → `instock`
-   - `0` → `outofstock`
-
-Mapper hiện hỗ trợ một số tên field tồn kho có thể gặp:
-
-```text
-stock
-quantity
-qty
-qtyinstock
-quantityinstock
-tonkho
-so_luong_ton
-inventory
-```
-
-**Cần xác nhận field tồn kho thật từ response Abit trước khi coi Phase 1 là hoàn tất production.**
-
-Nếu chưa nhập Product Store ID, sản phẩm vẫn sync nhưng stock không bị chỉnh và UI sẽ báo cảnh báo.
+- Xem sample values của sản phẩm để xác định màu/size đang được encode ở đâu (có thể trong tên/SKU/mã gốc hoặc nguồn khác).
+- Xem danh sách kho thật.
+- Xem key và value của record tồn kho thật.
 
 ---
 
@@ -271,280 +242,237 @@ Nếu chưa nhập Product Store ID, sản phẩm vẫn sync nhưng stock không
 
 ### `cunchici-abit.php`
 
-Plugin bootstrap.
+Bootstrap plugin.
 
 Trách nhiệm:
 
-- Khai báo plugin metadata/version/path.
-- Load các class.
-- Khởi tạo Settings, API client, Product Sync và Admin UI.
+- Metadata/version plugin.
+- Constants path/version.
+- Load class.
+- Khởi tạo Settings, API, Product Sync, Admin.
 
-Sửa file này khi:
-
-- Thêm service/class cấp cao mới.
-- Đổi version plugin.
-- Đổi bootstrap lifecycle.
+Sửa khi thêm service mới hoặc bump version.
 
 ### `includes/class-cunchici-abit-settings.php`
 
-Quản lý cấu hình plugin.
+Quản lý settings.
 
 Trách nhiệm:
 
-- Default values.
-- Đọc WordPress option `cunchici_abit_settings`.
-- Sanitize settings.
-- Validate plugin đã có token/partner chưa.
+- Base URL.
+- Access Token.
+- Partner Name.
+- Product Store ID.
+- Sync limit.
+- Sanitize/validate.
 
-Sửa file này khi:
-
-- Thêm field cấu hình mới.
-- Đổi default Base URL.
-- Đổi validation/sanitize settings.
+Sửa khi thêm cấu hình mới.
 
 ### `includes/class-cunchici-abit-api.php`
 
 HTTP client Abit.
 
+Hiện có:
+
+```text
+list_products()
+list_stores()
+list_products_with_stock()
+```
+
 Trách nhiệm:
 
-- Gửi POST JSON.
-- Tự thêm `access_token` và `partner_name`.
+- POST JSON.
+- Tự thêm token/partner.
 - Timeout 30 giây.
-- Parse JSON/error.
-- `list_products()`.
-- `list_products_with_stock()`.
+- Parse HTTP/JSON errors.
 
-Sửa file này khi:
-
-- Abit đổi endpoint/request format.
-- Thêm API mới.
-- Thêm retry/backoff.
-- Thêm chuẩn hóa lỗi API.
+Sửa file này nếu Abit đổi endpoint/request hoặc thêm API mới.
 
 ### `includes/class-cunchici-abit-product-mapper.php`
 
-Nơi duy nhất ưu tiên xử lý mapping field Abit → dữ liệu nội bộ.
+Mapper Abit -> dữ liệu nội bộ.
 
-Trách nhiệm:
+Đã chốt theo payload thật:
 
-- Product ID.
-- SKU.
-- Name.
-- Price.
-- Color.
-- Size.
-- Description.
-- Images normalization (đã có parser nhưng chưa import media ở Phase 1 hiện tại).
-- Stock quantity normalization.
+- `productid`.
+- `productcode`.
+- `productname`.
+- `unit_price`.
+- `gia_daily`.
+- description.
+- brand.
+- barcode.
+- mã gốc.
+- modified time.
+- image parser.
 
-**Nếu sai màu, size, giá hoặc field tồn kho, kiểm tra file này đầu tiên.**
+Quan trọng:
+
+```text
+color = chưa xác minh
+size = chưa xác minh
+stock quantity = chưa xác minh
+```
+
+Không thêm alias đoán khi chưa có evidence từ payload thật.
 
 ### `includes/class-cunchici-abit-product-sync.php`
 
-Business logic đồng bộ WooCommerce.
+Logic ghi WooCommerce.
 
 Trách nhiệm:
 
-- Gọi API từng page.
-- Extract danh sách row từ response wrapper.
-- Ghép stock theo Abit Product ID.
-- Upsert product.
-- Luôn dùng `WC_Product_Simple` cho item mới.
-- Không tự convert variable/external product sang simple để tránh mất dữ liệu.
-- Set SKU/name/description/price/attributes/stock.
-- Lưu meta đồng bộ.
-- Trả summary từng page.
+- Pagination từng page.
+- Upsert bằng `_cunchici_abit_product_id`.
+- Fallback SKU.
+- Chỉ tạo `WC_Product_Simple`.
+- Set name/description/price/SKU.
+- Stock chỉ ghi nếu mapper trả quantity thật.
+- Không xóa attributes khi color/size chưa có mapping.
 
-Meta hiện dùng:
+Meta hiện lưu:
 
 ```text
 _cunchici_abit_product_id
 _cunchici_abit_last_synced_at
+_cunchici_abit_modified_time
+_cunchici_abit_barcode
+_cunchici_abit_ma_goc
 ```
-
-Nếu cần thay chiến lược upsert, sửa file này.
 
 ### `includes/class-cunchici-abit-admin.php`
 
-Admin UI + AJAX entry points.
+Admin UI + AJAX.
 
-Trách nhiệm:
+Bản `0.1.1`:
 
-- Tạo menu.
-- Trang Settings.
-- Trang Sync.
-- Test connection.
-- Nonce/capability check.
-- Client-side pagination loop.
-- Hiển thị log sync.
+- Settings UI.
+- Diagnostic API test.
+- Liệt kê sample kho/payload.
+- Full sync UI bị khóa.
+- AJAX sync endpoint bị khóa server-side với HTTP 423.
 
-Nếu muốn thay giao diện, thêm nút preview/dry-run hoặc thêm cron trigger, bắt đầu từ file này.
+Nếu muốn mở lại sync, phải sửa file này **sau khi mapping đã xác minh**.
 
 ---
 
-## 8. Test kết nối trước khi sync thật
+## 8. Sự cố sync thử ngày 2026-08-22
 
-Trang **Cấu hình** có nút:
+Một lần bấm **Bắt đầu đồng bộ** đã xảy ra trước khi mapping hoàn tất.
+
+Kiến trúc bản cũ chạy như sau:
 
 ```text
-Test kết nối Abit
+Browser JavaScript
+  -> AJAX page 0
+  -> chờ xong
+  -> AJAX page 1
+  -> ...
 ```
 
-Nó gọi:
+Không có:
 
 ```text
-page = 0
-limit = 1
+WP-Cron
+Action Scheduler
+queue worker
+background process
 ```
 
-và **không ghi sản phẩm vào WooCommerce**.
+Do đó reload/đóng tab sẽ ngừng việc gửi **page tiếp theo**. Một request đang chạy dở tại thời điểm reload vẫn có thể hoàn thành.
 
-Kết quả hiện hiển thị:
+### Dữ liệu bản cũ có thể đã chạm
 
-- Kết nối thành công/thất bại.
-- `top_level_keys` của API response.
-- `first_product_keys` của sản phẩm mẫu.
+Trên những page đã hoàn tất, bản cũ có thể:
 
-Mục đích của `first_product_keys` là xác minh chính xác schema Abit của shop trước khi chốt mapper màu/size.
+- Tạo simple product mới.
+- Update sản phẩm hiện có nếu match Abit ID hoặc SKU.
+- Update tên.
+- Update description/short description.
+- Update regular/current price.
+- Update SKU nếu không conflict.
+- Gắn `_cunchici_abit_product_id`.
+- Gắn `_cunchici_abit_last_synced_at`.
+- Có nguy cơ clear WooCommerce attributes do color/size mapper rỗng.
+- Stock chỉ bị đụng nếu Product Store ID đã cấu hình và mapper tìm được quantity.
 
-Không hiển thị Access Token trong kết quả test.
-
----
-
-## 9. Upsert và chống trùng
-
-Thứ tự tìm sản phẩm:
-
-```text
-1. _cunchici_abit_product_id == Abit productid
-2. Nếu chưa có → tìm theo WooCommerce SKU == Abit productcode
-3. Không có nữa → tạo product mới
-```
-
-Sau khi save luôn gắn:
-
-```text
-_cunchici_abit_product_id
-```
-
-Do đó những lần sync sau ưu tiên ID Abit thay vì phụ thuộc SKU.
-
-Nếu SKU mới từ Abit đang thuộc một WooCommerce product khác, plugin không cưỡng ép set SKU để tránh WooCommerce duplicate-SKU exception.
+Không nên tự động rollback/xóa hàng loạt khi chưa audit vì có thể có sản phẩm WooCommerce cũ bị update chứ không chỉ sản phẩm mới.
 
 ---
 
-## 10. Quy tắc an toàn hiện tại
+## 9. Quy tắc an toàn từ bây giờ
 
-- Chỉ user có `manage_woocommerce` mới truy cập/sync.
-- AJAX có nonce.
-- Token không đưa vào JS.
-- Token không commit GitHub.
-- Một sản phẩm lỗi không làm dừng các sản phẩm còn lại trong page.
-- Không convert một WooCommerce product không phải `simple` sang simple tự động.
-- Không xóa sản phẩm khi Abit không trả về.
-- Không hard-delete dữ liệu website.
-- Chưa có cron tự động; chỉ chạy thủ công từ admin.
+Trước mọi thao tác ghi dữ liệu:
 
----
+1. Test API read-only.
+2. Capture sample payload thật.
+3. Chốt mapping.
+4. Có **Dry Run/Preview**.
+5. Cho phép giới hạn `N` sản phẩm test.
+6. Chỉ sau đó mới mở Full Sync.
 
-## 11. Việc còn phải xác minh trước production
-
-### Bắt buộc
-
-- [ ] Cài plugin vào staging/website.
-- [ ] Nhập Access Token + Partner Name.
-- [ ] Nhập Product Store ID đúng kho.
-- [ ] Bấm **Test kết nối Abit**.
-- [ ] Ghi nhận `first_product_keys` thực tế.
-- [ ] Xác định chính xác field màu.
-- [ ] Xác định chính xác field size.
-- [ ] Xác định chính xác field số lượng tồn kho.
-- [ ] Test sync với catalog nhỏ/staging trước.
-- [ ] Kiểm tra chạy lần 2 không tạo duplicate.
-- [ ] Kiểm tra SKU, giá, màu, size, tồn kho trên WooCommerce.
-
-### Nên làm sau khi payload thật đã xác minh
-
-- [ ] Thu hẹp alias mapper về field Abit chính xác.
-- [ ] Tighten `extract_rows()` theo response envelope thực tế.
-- [ ] Thêm retry/backoff cho lỗi mạng/5xx/429.
-- [ ] Thêm dry-run/preview trước khi ghi DB.
-- [ ] Thêm lịch tự động/cron nếu cần.
-- [ ] Thêm import ảnh nếu nghiệp vụ yêu cầu.
-- [ ] Thêm log lịch sử mỗi sync run vào DB.
+Full sync không được mở lại chỉ vì API trả HTTP 200.
 
 ---
 
-## 12. Khi cần sửa gì thì vào đâu?
+## 10. Việc cần làm tiếp theo
+
+- [x] Kết nối token/partner thành công.
+- [x] Xác minh payload list sản phẩm thật.
+- [x] Loại bỏ alias đoán màu/size.
+- [x] Ngăn mapper tồn kho đoán quantity.
+- [x] Giữ nguyên WooCommerce attributes nếu chưa map color/size.
+- [x] Thêm API danh sách kho.
+- [x] Khóa full sync ở UI và endpoint.
+- [ ] Update plugin trên website lên `0.1.1`.
+- [ ] Chạy diagnostic mới.
+- [ ] Chọn đúng Product Store ID.
+- [ ] Capture sample `listProductsWithStockforPartner`.
+- [ ] Xác định nguồn màu/size thật.
+- [ ] Thêm trang Dry Run/Preview.
+- [ ] Thêm giới hạn test 1/5/10 sản phẩm.
+- [ ] Audit các sản phẩm đã bị lần sync thử chạm tới.
+- [ ] Sau khi audit và mapping đúng mới mở full sync.
+
+---
+
+## 11. Khi cần sửa gì thì vào đâu?
 
 ```text
 Token / Partner / Kho / Limit
-→ includes/class-cunchici-abit-settings.php
-→ includes/class-cunchici-abit-admin.php
+-> includes/class-cunchici-abit-settings.php
+-> includes/class-cunchici-abit-admin.php
 
-Sai endpoint / payload Abit
-→ includes/class-cunchici-abit-api.php
+Endpoint / payload / API Abit
+-> includes/class-cunchici-abit-api.php
 
-Sai SKU / giá / màu / size / tồn kho
-→ includes/class-cunchici-abit-product-mapper.php
+SKU / giá / màu / size / tồn kho / ảnh
+-> includes/class-cunchici-abit-product-mapper.php
 
-Sai logic create/update/duplicate/stock
-→ includes/class-cunchici-abit-product-sync.php
+Create / update / duplicate / WooCommerce write
+-> includes/class-cunchici-abit-product-sync.php
 
-Sai menu / nút test / nút sync / AJAX / log
-→ includes/class-cunchici-abit-admin.php
+Menu / diagnostic / safety lock / sync button / AJAX
+-> includes/class-cunchici-abit-admin.php
 
-Thêm class/service mới hoặc đổi version
-→ cunchici-abit.php
+Version / bootstrap
+-> cunchici-abit.php
 ```
 
 ---
 
-## 13. Roadmap
+## 12. Nguyên tắc duy trì README
 
-### Phase 1 — Product sync
-
-- [x] Plugin bootstrap.
-- [x] Admin menu.
-- [x] Settings/token UI.
-- [x] Test API connection.
-- [x] Product list API client.
-- [x] Simple product upsert.
-- [x] SKU.
-- [x] Price.
-- [x] Color/Size attribute framework.
-- [x] Stock API framework.
-- [ ] Verify exact Abit color/size/stock fields using real shop payload.
-- [ ] Production/staging validation.
-
-### Phase 2
-
-- [ ] Product images.
-- [ ] Categories/brands mapping.
-- [ ] Automatic scheduled sync.
-- [ ] Sync history/log table.
-- [ ] Incremental sync if Abit supports a reliable modified-time strategy.
-
-### Phase 3
-
-- [ ] Orders.
-- [ ] Customers.
-- [ ] Order status/inventory workflows as required.
-
----
-
-## 14. Nguyên tắc duy trì README
-
-Mỗi commit thay đổi integration phải cập nhật README nếu có một trong các việc sau:
+Mỗi commit thay đổi integration phải cập nhật README nếu có:
 
 1. Thêm/xóa/đổi tên file.
-2. Di chuyển trách nhiệm giữa các class.
+2. Chuyển trách nhiệm class.
 3. Thêm endpoint Abit.
-4. Đổi field mapping.
+4. Đổi mapping.
 5. Đổi meta/schema DB.
 6. Đổi settings.
 7. Đổi cách sync/pagination/retry.
-8. Đổi mô hình sản phẩm.
+8. Đổi quy tắc an toàn.
 
-Mục tiêu: **README phải phản ánh code thật, không phải tài liệu dự kiến.**
+Mục tiêu: **README luôn phản ánh code thật và trạng thái production hiện tại.**
