@@ -5,89 +5,64 @@ defined( 'ABSPATH' ) || exit;
 class Cunchici_Abit_Product_Sync {
 	private $settings;
 	private $api;
+	private $repository;
 
-	public function __construct( Cunchici_Abit_Settings $settings, Cunchici_Abit_API $api ) {
-		$this->settings = $settings;
-		$this->api      = $api;
+	public function __construct( Cunchici_Abit_Settings $settings, Cunchici_Abit_API $api, Cunchici_Abit_Sync_Repository $repository ) {
+		$this->settings   = $settings;
+		$this->api        = $api;
+		$this->repository = $repository;
 	}
 
-	public function sync_page( $page = 0 ) {
+	/**
+	 * Process exactly one queued product so the admin UI can show accurate
+	 * product-level progress and pause safely between items.
+	 */
+	public function process_run_step( $run_id ) {
 		if ( ! class_exists( 'WooCommerce' ) || ! function_exists( 'wc_get_product' ) ) {
 			return new WP_Error( 'cunchici_abit_woocommerce_missing', 'WooCommerce chưa được kích hoạt.' );
 		}
 
-		$limit = max( 1, absint( $this->settings->get( 'sync_limit', 100 ) ) );
-		$page  = max( 0, absint( $page ) );
-
-		$product_response = $this->api->list_products( $page, $limit );
-		if ( is_wp_error( $product_response ) ) {
-			return $product_response;
+		$run = $this->repository->get_run( $run_id );
+		if ( ! $run ) {
+			return new WP_Error( 'cunchici_abit_run_missing', 'Không tìm thấy phiên đồng bộ.' );
+		}
+		if ( 'paused' === $run['status'] ) {
+			return new WP_Error( 'cunchici_abit_run_paused', 'Phiên đồng bộ đang tạm dừng.' );
+		}
+		if ( in_array( $run['status'], array( 'completed', 'cancelled' ), true ) ) {
+			return $this->progress_payload( $run, null, '' );
 		}
 
-		$product_rows  = $this->extract_rows( $product_response );
-		$stock_map     = array();
-		$stock_warning = '';
-
-		if ( '' !== trim( (string) $this->settings->get( 'productstoreid', '' ) ) ) {
-			$stock_response = $this->api->list_products_with_stock( $page, $limit );
-			if ( is_wp_error( $stock_response ) ) {
-				$stock_warning = $stock_response->get_error_message();
-			} else {
-				foreach ( $this->extract_rows( $stock_response ) as $stock_row ) {
-					$id = $this->row_product_id( $stock_row );
-					if ( '' !== $id ) {
-						$stock_map[ $id ] = $stock_row;
-					}
-				}
-			}
-		} else {
-			$stock_warning = 'Chưa cấu hình Product Store ID nên tồn kho chưa được cập nhật.';
+		$item = $this->repository->next_queued_item( $run_id );
+		if ( ! $item ) {
+			$run = $this->repository->mark_completed_if_done( $run_id );
+			return $this->progress_payload( $run, null, '' );
 		}
 
-		$result = array(
-			'page'          => $page,
-			'fetched'       => count( $product_rows ),
-			'created'       => 0,
-			'updated'       => 0,
-			'failed'        => 0,
-			'errors'        => array(),
-			'has_more'      => count( $product_rows ) >= $limit,
-			'next_page'     => $page + 1,
-			'stock_warning' => $stock_warning,
-		);
+		$this->repository->start_run( $run_id, $item );
+		$raw     = $this->repository->get_item_payload( $item );
+		$mapped  = Cunchici_Abit_Product_Mapper::map( $raw );
+		$options = isset( $run['options'] ) && is_array( $run['options'] ) ? $run['options'] : array();
+		$action  = '';
 
-		foreach ( $product_rows as $row ) {
-			$mapped = Cunchici_Abit_Product_Mapper::map( $row );
-			$id     = (string) $mapped['abit_product_id'];
-
-			if ( '' === $id || '' === trim( $mapped['name'] ) ) {
-				$result['failed']++;
-				$result['errors'][] = array(
-					'abit_product_id' => $id,
-					'sku'             => $mapped['sku'],
-					'message'         => 'Thiếu productid hoặc productname.',
-				);
-				continue;
+		try {
+			if ( '' === trim( (string) $mapped['abit_product_id'] ) || '' === trim( (string) $mapped['name'] ) ) {
+				throw new Exception( 'Thiếu productid hoặc productname.' );
 			}
-
-			try {
-				$stock_row = isset( $stock_map[ $id ] ) ? $stock_map[ $id ] : null;
-				$action    = $this->upsert( $mapped, $stock_row );
-				$result[ $action ]++;
-			} catch ( Exception $e ) {
-				$result['failed']++;
-				$result['errors'][] = array(
-					'abit_product_id' => $id,
-					'sku'             => $mapped['sku'],
-					'message'         => $e->getMessage(),
-				);
-			}
+			$result = $this->upsert( $mapped, $options );
+			$action = $result['action'];
+			$this->repository->finish_item( $run_id, $item['id'], true, $result['product_id'], '' );
+		} catch ( Throwable $e ) {
+			$this->repository->finish_item( $run_id, $item['id'], false, 0, $e->getMessage() );
+			$run = $this->repository->get_run( $run_id );
+			return $this->progress_payload( $run, $item, '', $e->getMessage() );
 		}
 
-		return $result;
+		$run = $this->repository->mark_completed_if_done( $run_id );
+		return $this->progress_payload( $run, $item, $action );
 	}
 
-	private function upsert( array $mapped, $stock_row = null ) {
+	private function upsert( array $mapped, array $options ) {
 		$product_id = $this->find_product_id( $mapped['abit_product_id'], $mapped['sku'] );
 		$is_new     = ! $product_id;
 
@@ -97,11 +72,11 @@ class Cunchici_Abit_Product_Sync {
 				throw new Exception( 'Không thể load WooCommerce product hiện có.' );
 			}
 			if ( ! $product->is_type( 'simple' ) ) {
-				throw new Exception( 'SKU/Abit ID đang trỏ tới sản phẩm không phải simple; không tự chuyển type để tránh mất dữ liệu.' );
+				throw new Exception( 'Abit ID/SKU đang trỏ tới sản phẩm không phải simple; plugin không tự đổi type.' );
 			}
 		} else {
 			$product = new WC_Product_Simple();
-			$product->set_status( 'publish' );
+			$product->set_status( isset( $options['new_product_status'] ) && 'draft' === $options['new_product_status'] ? 'draft' : 'publish' );
 		}
 
 		$product->set_name( wp_strip_all_tags( $mapped['name'] ) );
@@ -114,27 +89,20 @@ class Cunchici_Abit_Product_Sync {
 			$owner = wc_get_product_id_by_sku( $mapped['sku'] );
 			if ( ! $owner || (int) $owner === (int) $product->get_id() ) {
 				$product->set_sku( $mapped['sku'] );
+			} else {
+				throw new Exception( sprintf( 'SKU %s đã thuộc WooCommerce product #%d.', $mapped['sku'], $owner ) );
 			}
 		}
 
-		// Do not call set_attributes([]). The verified list API currently has no
-		// separate color/size keys; overwriting with an empty array would erase
-		// attributes already maintained in WooCommerce.
+		// The verified Abit product-list response does not contain color/size.
+		// Never replace WooCommerce attributes with an empty set.
 		if ( $this->has_mapped_attributes( $mapped ) ) {
 			$product->set_attributes( $this->build_attributes( $mapped ) );
 		}
 
-		if ( is_array( $stock_row ) ) {
-			$quantity = Cunchici_Abit_Product_Mapper::stock_quantity( $stock_row );
-			if ( null !== $quantity ) {
-				$product->set_manage_stock( true );
-				$product->set_stock_quantity( $quantity );
-				$product->set_stock_status( $quantity > 0 ? 'instock' : 'outofstock' );
-			}
-		}
+		$this->apply_categories( $product, $mapped, $options );
 
 		$product_id = $product->save();
-
 		update_post_meta( $product_id, '_cunchici_abit_product_id', sanitize_text_field( $mapped['abit_product_id'] ) );
 		update_post_meta( $product_id, '_cunchici_abit_last_synced_at', current_time( 'mysql', true ) );
 		update_post_meta( $product_id, '_cunchici_abit_modified_time', sanitize_text_field( $mapped['modified_time'] ) );
@@ -146,7 +114,75 @@ class Cunchici_Abit_Product_Sync {
 			update_post_meta( $product_id, '_cunchici_abit_ma_goc', sanitize_text_field( $mapped['original_code'] ) );
 		}
 
-		return $is_new ? 'created' : 'updated';
+		return array( 'product_id' => $product_id, 'action' => $is_new ? 'created' : 'updated' );
+	}
+
+	private function apply_categories( WC_Product $product, array $mapped, array $options ) {
+		$mode = isset( $options['category_mode'] ) ? $options['category_mode'] : 'keep';
+		if ( 'keep' === $mode ) {
+			return;
+		}
+
+		if ( 'fixed' === $mode ) {
+			$term_id = isset( $options['fixed_category_id'] ) ? absint( $options['fixed_category_id'] ) : 0;
+			if ( $term_id && term_exists( $term_id, 'product_cat' ) ) {
+				$product->set_category_ids( array( $term_id ) );
+			}
+			return;
+		}
+
+		if ( 'abit' !== $mode ) {
+			return;
+		}
+
+		$names = Cunchici_Abit_Product_Mapper::category_names( $mapped['category'] );
+		if ( ! $names ) {
+			return;
+		}
+
+		$ids = array();
+		foreach ( $names as $name ) {
+			$existing = term_exists( $name, 'product_cat' );
+			if ( is_array( $existing ) && isset( $existing['term_id'] ) ) {
+				$ids[] = (int) $existing['term_id'];
+				continue;
+			}
+			if ( is_int( $existing ) ) {
+				$ids[] = $existing;
+				continue;
+			}
+			$created = wp_insert_term( $name, 'product_cat' );
+			if ( ! is_wp_error( $created ) && isset( $created['term_id'] ) ) {
+				$ids[] = (int) $created['term_id'];
+			}
+		}
+
+		if ( $ids ) {
+			$product->set_category_ids( array_values( array_unique( $ids ) ) );
+		}
+	}
+
+	private function progress_payload( array $run, $item = null, $action = '', $error = '' ) {
+		$total     = max( 0, (int) $run['total'] );
+		$processed = max( 0, (int) $run['processed'] );
+		$percent   = $total > 0 ? min( 100, round( ( $processed / $total ) * 100, 1 ) ) : 100;
+
+		return array(
+			'run_id'       => (int) $run['id'],
+			'status'       => $run['status'],
+			'total'        => $total,
+			'processed'    => $processed,
+			'succeeded'    => (int) $run['succeeded'],
+			'failed'       => (int) $run['failed'],
+			'percent'      => $percent,
+			'product'      => $item ? array(
+				'id'   => (int) $item['id'],
+				'sku'  => $item['sku'],
+				'name' => $item['product_name'],
+			) : null,
+			'action'       => $action,
+			'error'        => $error,
+		);
 	}
 
 	private function has_mapped_attributes( array $mapped ) {
@@ -156,13 +192,11 @@ class Cunchici_Abit_Product_Sync {
 	private function build_attributes( array $mapped ) {
 		$attributes = array();
 		$position   = 0;
-
 		foreach ( array( 'Màu sắc' => $mapped['color'], 'Size' => $mapped['size'] ) as $name => $value ) {
 			$value = trim( (string) $value );
 			if ( '' === $value ) {
 				continue;
 			}
-
 			$attribute = new WC_Product_Attribute();
 			$attribute->set_id( 0 );
 			$attribute->set_name( $name );
@@ -172,7 +206,6 @@ class Cunchici_Abit_Product_Sync {
 			$attribute->set_variation( false );
 			$attributes[] = $attribute;
 		}
-
 		return $attributes;
 	}
 
@@ -187,62 +220,9 @@ class Cunchici_Abit_Product_Sync {
 				'meta_value'     => sanitize_text_field( $abit_product_id ),
 			)
 		);
-
 		if ( ! empty( $ids ) ) {
 			return (int) $ids[0];
 		}
-
 		return '' !== trim( (string) $sku ) ? (int) wc_get_product_id_by_sku( $sku ) : 0;
-	}
-
-	private function row_product_id( array $row ) {
-		foreach ( array( 'productid', 'product_id', 'id' ) as $key ) {
-			if ( isset( $row[ $key ] ) && '' !== (string) $row[ $key ] ) {
-				return (string) $row[ $key ];
-			}
-		}
-
-		return '';
-	}
-
-	/**
-	 * Accept common API wrappers without coupling the rest of the plugin to one
-	 * response envelope. The live product list is currently a top-level array.
-	 */
-	private function extract_rows( $response ) {
-		if ( ! is_array( $response ) ) {
-			return array();
-		}
-
-		if ( $this->is_list_of_rows( $response ) ) {
-			return $response;
-		}
-
-		foreach ( array( 'data', 'products', 'items', 'result', 'list' ) as $key ) {
-			if ( ! isset( $response[ $key ] ) || ! is_array( $response[ $key ] ) ) {
-				continue;
-			}
-
-			if ( $this->is_list_of_rows( $response[ $key ] ) ) {
-				return $response[ $key ];
-			}
-
-			foreach ( array( 'data', 'products', 'items', 'list' ) as $nested ) {
-				if ( isset( $response[ $key ][ $nested ] ) && $this->is_list_of_rows( $response[ $key ][ $nested ] ) ) {
-					return $response[ $key ][ $nested ];
-				}
-			}
-		}
-
-		return array();
-	}
-
-	private function is_list_of_rows( $value ) {
-		if ( ! is_array( $value ) || empty( $value ) ) {
-			return false;
-		}
-
-		$first = reset( $value );
-		return is_array( $first );
 	}
 }
