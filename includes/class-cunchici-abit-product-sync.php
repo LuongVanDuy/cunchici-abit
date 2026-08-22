@@ -36,17 +36,19 @@ class Cunchici_Abit_Product_Sync {
 		}
 
 		$this->repository->start_run( $run_id, $item );
-		$raw     = $this->repository->get_item_payload( $item );
-		$mapped  = Cunchici_Abit_Product_Mapper::map( $raw );
-		$options = isset( $run['options'] ) && is_array( $run['options'] ) ? $run['options'] : array();
-		$action  = '';
+		$raw          = $this->repository->get_item_payload( $item );
+		$mapped       = Cunchici_Abit_Product_Mapper::map( $raw );
+		$options      = isset( $run['options'] ) && is_array( $run['options'] ) ? $run['options'] : array();
+		$action       = '';
+		$image_result = null;
 
 		try {
 			if ( '' === trim( (string) $mapped['abit_product_id'] ) || '' === trim( (string) $mapped['name'] ) ) {
 				throw new Exception( 'Thiếu productid hoặc productname.' );
 			}
-			$result = $this->upsert( $mapped, $options );
-			$action = $result['action'];
+			$result       = $this->upsert( $mapped, $options );
+			$action       = $result['action'];
+			$image_result = isset( $result['images'] ) ? $result['images'] : null;
 			$this->repository->finish_item( $run_id, $item['id'], true, $result['product_id'], '' );
 		} catch ( Throwable $e ) {
 			$this->repository->finish_item( $run_id, $item['id'], false, 0, $e->getMessage() );
@@ -55,7 +57,7 @@ class Cunchici_Abit_Product_Sync {
 		}
 
 		$run = $this->repository->mark_completed_if_done( $run_id );
-		return $this->progress_payload( $run, $item, $action );
+		return $this->progress_payload( $run, $item, $action, '', $image_result );
 	}
 
 	public function next_product_summary( $run_id ) {
@@ -113,7 +115,24 @@ class Cunchici_Abit_Product_Sync {
 			update_post_meta( $product_id, '_cunchici_abit_ma_goc', sanitize_text_field( $mapped['original_code'] ) );
 		}
 
-		return array( 'product_id' => $product_id, 'action' => $is_new ? 'created' : 'updated' );
+		// Images are synced after the first save because Media Library attachments
+		// need a real WooCommerce product ID as their parent. If Abit has no valid
+		// image or the CDN fails, Media Sync keeps the current Woo images intact.
+		$image_result = Cunchici_Abit_Media_Sync::sync_product_images(
+			$product,
+			isset( $mapped['images'] ) && is_array( $mapped['images'] ) ? $mapped['images'] : array(),
+			array(
+				'abit_product_id' => $mapped['abit_product_id'],
+				'sku'             => $mapped['sku'],
+				'name'            => $mapped['name'],
+			)
+		);
+
+		return array(
+			'product_id' => $product_id,
+			'action'     => $is_new ? 'created' : 'updated',
+			'images'     => $image_result,
+		);
 	}
 
 	private function apply_categories( WC_Product $product, array $mapped, array $options ) {
@@ -163,7 +182,7 @@ class Cunchici_Abit_Product_Sync {
 		}
 	}
 
-	private function progress_payload( array $run, $item = null, $action = '', $error = '' ) {
+	private function progress_payload( array $run, $item = null, $action = '', $error = '', $images = null ) {
 		$total        = max( 0, (int) $run['total'] );
 		$processed    = max( 0, (int) $run['processed'] );
 		$percent      = $total > 0 ? min( 100, round( ( $processed / $total ) * 100, 1 ) ) : 100;
@@ -181,6 +200,7 @@ class Cunchici_Abit_Product_Sync {
 			'next_product' => $next_product,
 			'action'       => $action,
 			'error'        => $error,
+			'images'       => $images,
 		);
 	}
 
