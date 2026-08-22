@@ -1,0 +1,20 @@
+{
+  "source": "GitHub Actions live probe against Abit Open API",
+  "workflow_run_id": 32568324012,
+  "partner_name": "tac989",
+  "active_rows_checked": 2579,
+  "imagename_nonempty": 2579,
+  "default_image_nonempty": 838,
+  "both_empty": 0,
+  "verified_imagename_type": "JSON string",
+  "verified_item_shape": {
+    "id": 1,
+    "isDefault": true,
+    "imgSrc": "https://cf.shopee.vn/file/..."
+  },
+  "important": [
+    "Many real image URLs have no .jpg/.png extension.",
+    "default_image is optional and cannot be used as the only image source.",
+    "imagename must be JSON-decoded and imgSrc used as the remote source URL."
+  ]
+}
