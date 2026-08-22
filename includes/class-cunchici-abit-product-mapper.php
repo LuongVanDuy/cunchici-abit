@@ -77,6 +77,7 @@ class Cunchici_Abit_Product_Mapper {
 						$names = array_merge( $names, self::category_names( $child ) );
 					}
 				}
+			}
 		}
 
 		$names = array_map( 'sanitize_text_field', $names );
