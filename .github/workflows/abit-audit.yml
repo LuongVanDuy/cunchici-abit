@@ -1,0 +1,230 @@
+name: Abit Product Audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/abit-audit-trigger.txt'
+
+permissions:
+  contents: read
+
+env:
+  ABIT_BASE_URL: https://new.abitstore.vn
+  ABIT_PARTNER_NAME: tac989
+  ABIT_ADMIN_EXPECTED: '2579'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate secret
+        env:
+          ABIT_ACCESS_TOKEN: ${{ secrets.ABIT_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$ABIT_ACCESS_TOKEN" ]; then
+            echo "Missing repository secret ABIT_ACCESS_TOKEN" >&2
+            exit 1
+          fi
+          echo "::add-mask::$ABIT_ACCESS_TOKEN"
+
+      - name: Audit Abit product API
+        env:
+          ABIT_ACCESS_TOKEN: ${{ secrets.ABIT_ACCESS_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import collections
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          base_url = os.environ['ABIT_BASE_URL'].rstrip('/')
+          token = os.environ['ABIT_ACCESS_TOKEN']
+          partner = os.environ['ABIT_PARTNER_NAME']
+          expected = int(os.environ.get('ABIT_ADMIN_EXPECTED', '0') or 0)
+          endpoint = base_url + '/products/listProductsforPartner'
+
+          def post(payload, retries=3):
+              body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+              req = urllib.request.Request(
+                  endpoint,
+                  data=body,
+                  headers={'Content-Type': 'application/json'},
+                  method='POST',
+              )
+              last = None
+              for attempt in range(retries):
+                  try:
+                      with urllib.request.urlopen(req, timeout=45) as res:
+                          raw = res.read().decode('utf-8')
+                          return json.loads(raw)
+                  except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+                      last = exc
+                      if attempt + 1 < retries:
+                          time.sleep(2 ** attempt)
+              raise RuntimeError(f'Abit request failed after {retries} attempts: {last}')
+
+          def extract_rows(data):
+              if isinstance(data, list):
+                  return [x for x in data if isinstance(x, dict)]
+              if not isinstance(data, dict):
+                  return []
+              for key in ('data', 'products', 'items', 'result', 'list'):
+                  value = data.get(key)
+                  if isinstance(value, list):
+                      return [x for x in value if isinstance(x, dict)]
+                  if isinstance(value, dict):
+                      for nested in ('data', 'products', 'items', 'list'):
+                          nested_value = value.get(nested)
+                          if isinstance(nested_value, list):
+                              return [x for x in nested_value if isinstance(x, dict)]
+              return []
+
+          limit = 100
+          page = 0
+          rows_all = []
+          page_counts = []
+
+          while page <= 10000:
+              payload = {
+                  'access_token': token,
+                  'partner_name': partner,
+                  'page': page,
+                  'limit': limit,
+              }
+              rows = extract_rows(post(payload))
+              page_counts.append(len(rows))
+              rows_all.extend(rows)
+              print(f'page={page} count={len(rows)} total_rows={len(rows_all)}')
+              if len(rows) < limit:
+                  break
+              page += 1
+          else:
+              raise RuntimeError('Safety stop: exceeded 10000 pages')
+
+          ids = collections.defaultdict(list)
+          skus = collections.defaultdict(list)
+          status_counts = collections.Counter()
+          empty_id_rows = 0
+          empty_sku_rows = 0
+
+          for row in rows_all:
+              product_id = str(row.get('productid') or '').strip()
+              sku = str(row.get('productcode') or '').strip()
+              status = row.get('status')
+              status_key = 'null' if status is None else str(status)
+              status_counts[status_key] += 1
+
+              if product_id:
+                  ids[product_id].append(row)
+              else:
+                  empty_id_rows += 1
+              if sku:
+                  skus[sku].append(row)
+              else:
+                  empty_sku_rows += 1
+
+          duplicate_ids = {k: v for k, v in ids.items() if len(v) > 1}
+          duplicate_skus = {k: v for k, v in skus.items() if len(v) > 1}
+          unique_ids = len(ids)
+          delta = unique_ids - expected if expected else None
+
+          # Capability probe: if a far-future range still returns products,
+          # Abit is ignoring date_time_start/date_time_end on this endpoint.
+          future_payload = {
+              'access_token': token,
+              'partner_name': partner,
+              'page': 0,
+              'limit': 10,
+              'date_time_start': '2099-01-01 00:00:00',
+              'date_time_end': '2099-01-02 23:59:59',
+          }
+          future_rows = extract_rows(post(future_payload))
+          date_filter_likely_supported = len(future_rows) == 0
+
+          non_status_1 = []
+          for row in rows_all:
+              status = row.get('status')
+              if str(status) != '1':
+                  non_status_1.append({
+                      'productid': row.get('productid'),
+                      'productcode': row.get('productcode'),
+                      'productname': row.get('productname'),
+                      'status': status,
+                      'modifiedtime': row.get('modifiedtime'),
+                  })
+
+          duplicate_sku_samples = []
+          for sku, group in list(duplicate_skus.items())[:200]:
+              duplicate_sku_samples.append({
+                  'sku': sku,
+                  'count': len(group),
+                  'productids': [str(x.get('productid') or '') for x in group],
+              })
+
+          result = {
+              'api_total_rows': len(rows_all),
+              'api_unique_product_ids': unique_ids,
+              'admin_expected_count': expected or None,
+              'difference_unique_vs_admin': delta,
+              'status_counts': dict(sorted(status_counts.items())),
+              'status_1_count': int(status_counts.get('1', 0)),
+              'status_not_1_count': len(non_status_1),
+              'duplicate_productid_groups': len(duplicate_ids),
+              'unique_non_empty_skus': len(skus),
+              'duplicate_sku_groups': len(duplicate_skus),
+              'empty_productid_rows': empty_id_rows,
+              'empty_sku_rows': empty_sku_rows,
+              'pages_read': len(page_counts),
+              'last_page_count': page_counts[-1] if page_counts else 0,
+              'future_date_probe_rows': len(future_rows),
+              'date_filter_likely_supported': date_filter_likely_supported,
+              'non_status_1_sample': non_status_1[:200],
+              'duplicate_sku_sample': duplicate_sku_samples,
+          }
+
+          with open('abit-audit-result.json', 'w', encoding='utf-8') as f:
+              json.dump(result, f, ensure_ascii=False, indent=2)
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary_path:
+              with open(summary_path, 'a', encoding='utf-8') as f:
+                  f.write('## Abit Product Audit\n\n')
+                  f.write(f'- API rows: **{result["api_total_rows"]}**\n')
+                  f.write(f'- Unique product IDs: **{result["api_unique_product_ids"]}**\n')
+                  f.write(f'- Abit Admin expected: **{expected}**\n')
+                  f.write(f'- Difference: **{delta}**\n')
+                  f.write(f'- Status counts: `{json.dumps(result["status_counts"], ensure_ascii=False)}`\n')
+                  f.write(f'- Duplicate productid groups: **{result["duplicate_productid_groups"]}**\n')
+                  f.write(f'- Duplicate SKU groups: **{result["duplicate_sku_groups"]}**\n')
+                  f.write(f'- Future date probe rows: **{result["future_date_probe_rows"]}**\n')
+                  f.write(f'- Date filter likely supported: **{result["date_filter_likely_supported"]}**\n')
+
+          print('AUDIT_RESULT=' + json.dumps({
+              k: result[k] for k in (
+                  'api_total_rows',
+                  'api_unique_product_ids',
+                  'admin_expected_count',
+                  'difference_unique_vs_admin',
+                  'status_counts',
+                  'duplicate_productid_groups',
+                  'duplicate_sku_groups',
+                  'empty_productid_rows',
+                  'empty_sku_rows',
+                  'future_date_probe_rows',
+                  'date_filter_likely_supported',
+              )
+          }, ensure_ascii=False))
+          PY
+
+      - name: Upload audit result
+        uses: actions/upload-artifact@v4
+        with:
+          name: abit-product-audit
+          path: abit-audit-result.json
+          retention-days: 7
