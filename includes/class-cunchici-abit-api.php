@@ -55,22 +55,28 @@ class Cunchici_Abit_API {
 	}
 
 	/**
-	 * Verified product list endpoint.
+	 * Product discovery endpoint.
+	 *
+	 * date_time_start/date_time_end are optional. The first catalog discovery can
+	 * omit them; incremental scans pass the completed discovery checkpoint.
 	 */
-	public function list_products( $page = 0, $limit = 100 ) {
-		return $this->post(
-			'/products/listProductsforPartner',
-			array(
-				'page'  => max( 0, absint( $page ) ),
-				'limit' => max( 1, absint( $limit ) ),
-			)
+	public function list_products( $page = 0, $limit = 100, $date_time_start = '', $date_time_end = '' ) {
+		$body = array(
+			'page'  => max( 0, absint( $page ) ),
+			'limit' => max( 1, absint( $limit ) ),
 		);
+
+		if ( '' !== trim( (string) $date_time_start ) ) {
+			$body['date_time_start'] = sanitize_text_field( $date_time_start );
+		}
+		if ( '' !== trim( (string) $date_time_end ) ) {
+			$body['date_time_end'] = sanitize_text_field( $date_time_end );
+		}
+
+		return $this->post( '/products/listProductsforPartner', $body );
 	}
 
-	/**
-	 * Abit warehouse/branch discovery.
-	 * Docs: POST /productstore/getStoreidByPartner
-	 */
+	/** Abit warehouse/branch discovery. */
 	public function list_stores( $page = 0, $limit = 100 ) {
 		return $this->post(
 			'/productstore/getStoreidByPartner',
@@ -81,9 +87,7 @@ class Cunchici_Abit_API {
 		);
 	}
 
-	/**
-	 * Product list with current stock for one Abit warehouse/branch.
-	 */
+	/** Product list with current stock for one Abit warehouse/branch. */
 	public function list_products_with_stock( $page = 0, $limit = 100 ) {
 		$store_id = trim( (string) $this->settings->get( 'productstoreid', '' ) );
 		if ( '' === $store_id ) {
