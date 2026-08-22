@@ -1,0 +1,33 @@
+{
+  "source": "GitHub Actions live probe against Abit Open API and returned image CDN URLs",
+  "workflow_run_id": 32569422012,
+  "partner_name": "tac989",
+  "active_rows_checked": 2579,
+  "image_fields": {
+    "imagename_nonempty": 2579,
+    "default_image_nonempty": 838,
+    "both_empty": 0
+  },
+  "description_format": {
+    "description_nonempty": 2567,
+    "description_has_newline": 1899,
+    "description_has_br": 0,
+    "description_has_p": 372,
+    "short_description_nonempty": 2567,
+    "short_description_has_newline": 1899,
+    "short_description_has_br": 0,
+    "short_description_has_p": 372
+  },
+  "cdn_probe": {
+    "urls_tested": 3,
+    "successes": 3,
+    "http_status": 200,
+    "content_type": "image/jpeg",
+    "jpeg_magic_verified": true,
+    "redirect_observed": false
+  },
+  "conclusion": [
+    "Abit and Shopee CDN return valid JPEG image bodies; importer failures are on the WordPress-side download/sideload path, not missing source images.",
+    "Most descriptions requiring visible line breaks use CR/LF plain text rather than <br>, so WordPress formatting must apply wpautop after sanitization."
+  ]
+}
