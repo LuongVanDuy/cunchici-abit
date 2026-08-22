@@ -31,8 +31,12 @@ class Cunchici_Abit_Discovery {
 		$start      = '';
 
 		if ( $checkpoint ) {
-			$time = strtotime( $checkpoint . ' -5 minutes' );
-			$start = $time ? wp_date( 'Y-m-d H:i:s', $time, wp_timezone() ) : $checkpoint;
+			try {
+				$date  = new DateTimeImmutable( $checkpoint, wp_timezone() );
+				$start = $date->modify( '-5 minutes' )->format( 'Y-m-d H:i:s' );
+			} catch ( Exception $e ) {
+				$start = $checkpoint;
+			}
 		}
 
 		return array( 'start' => $start, 'end' => $end, 'is_initial' => ! $checkpoint );
@@ -46,13 +50,13 @@ class Cunchici_Abit_Discovery {
 
 		$now = current_time( 'mysql' );
 		if ( $initial_full ) {
-			$api_start = '';
-			$api_end   = '';
+			$api_start  = '';
+			$api_end    = '';
 			$target_end = $now;
 		} else {
-			$suggested = $this->suggested_range();
-			$api_start = $this->normalize_datetime( $date_time_start ?: $suggested['start'] );
-			$api_end   = $this->normalize_datetime( $date_time_end ?: $suggested['end'] );
+			$suggested  = $this->suggested_range();
+			$api_start  = $this->normalize_datetime( $date_time_start ?: $suggested['start'] );
+			$api_end    = $this->normalize_datetime( $date_time_end ?: $suggested['end'] );
 			if ( '' === $api_end ) {
 				$api_end = $now;
 			}
@@ -94,7 +98,7 @@ class Cunchici_Abit_Discovery {
 		);
 
 		if ( is_wp_error( $response ) ) {
-			$state['status'] = 'paused';
+			$state['status']     = 'paused';
 			$state['last_error'] = $response->get_error_message();
 			update_option( self::STATE_OPTION, $state, false );
 			return $response;
@@ -104,27 +108,27 @@ class Cunchici_Abit_Discovery {
 		foreach ( $rows as $row ) {
 			$mapped = Cunchici_Abit_Product_Mapper::map( $row );
 			$result = $this->repository->upsert_candidate( $mapped, $row );
-			if ( isset( $state[ $result ] ) ) {
+			if ( is_string( $result ) && isset( $state[ $result ] ) ) {
 				$state[ $result ]++;
 			}
 		}
 
-		$state['fetched'] += count( $rows );
+		$state['fetched']   += count( $rows );
 		$state['last_error'] = '';
 		$has_more = count( $rows ) >= (int) $state['limit'];
 
 		if ( $has_more ) {
-			$state['page'] = (int) $state['page'] + 1;
+			$state['page']   = (int) $state['page'] + 1;
 			$state['status'] = 'running';
 		} else {
-			$state['status'] = 'completed';
+			$state['status']      = 'completed';
 			$state['finished_at'] = current_time( 'mysql' );
 			update_option( self::CHECKPOINT_OPTION, $state['target_end'], false );
 		}
 
 		update_option( self::STATE_OPTION, $state, false );
 		$state['last_page_count'] = count( $rows );
-		$state['has_more'] = $has_more;
+		$state['has_more']        = $has_more;
 		return $state;
 	}
 
@@ -140,7 +144,7 @@ class Cunchici_Abit_Discovery {
 	public function cancel() {
 		$state = $this->state();
 		if ( $state ) {
-			$state['status'] = 'cancelled';
+			$state['status']      = 'cancelled';
 			$state['finished_at'] = current_time( 'mysql' );
 			update_option( self::STATE_OPTION, $state, false );
 		}
@@ -156,8 +160,12 @@ class Cunchici_Abit_Discovery {
 		if ( 16 === strlen( $value ) ) {
 			$value .= ':00';
 		}
-		$time = strtotime( $value );
-		return $time ? date( 'Y-m-d H:i:s', $time ) : '';
+		try {
+			$date = new DateTimeImmutable( $value, wp_timezone() );
+			return $date->format( 'Y-m-d H:i:s' );
+		} catch ( Exception $e ) {
+			return '';
+		}
 	}
 
 	private function extract_rows( $response ) {
