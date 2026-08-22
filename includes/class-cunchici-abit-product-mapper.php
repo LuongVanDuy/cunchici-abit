@@ -14,26 +14,26 @@ class Cunchici_Abit_Product_Mapper {
 		$category = isset( $row['productcategory'] ) ? $row['productcategory'] : null;
 
 		return array(
-			'abit_product_id'  => isset( $row['productid'] ) ? (string) $row['productid'] : '',
-			'sku'              => isset( $row['productcode'] ) ? (string) $row['productcode'] : '',
-			'name'             => isset( $row['productname'] ) ? (string) $row['productname'] : '',
-			'price'            => self::number( isset( $row['unit_price'] ) ? $row['unit_price'] : 0 ),
-			'daily_price'      => self::number( isset( $row['gia_daily'] ) ? $row['gia_daily'] : 0 ),
-			'color'            => '',
-			'size'             => '',
-			'description'      => isset( $row['description'] ) ? (string) $row['description'] : '',
-			'short_description'=> isset( $row['short_description'] ) ? (string) $row['short_description'] : '',
-			'brand'            => isset( $row['brandname'] ) ? (string) $row['brandname'] : '',
-			'brand_id'         => isset( $row['brandid'] ) ? (string) $row['brandid'] : '',
-			'barcode'          => isset( $row['barcode'] ) ? (string) $row['barcode'] : '',
-			'original_code'    => isset( $row['ma_goc'] ) ? (string) $row['ma_goc'] : '',
-			'accounting_code'  => isset( $row['ma_ke_toan'] ) ? (string) $row['ma_ke_toan'] : '',
-			'category'         => $category,
-			'category_label'   => self::category_label( $category ),
-			'modified_time'    => isset( $row['modifiedtime'] ) ? (string) $row['modifiedtime'] : '',
-			'status'           => isset( $row['status'] ) ? $row['status'] : null,
-			'images'           => self::images( $row ),
-			'raw'              => $row,
+			'abit_product_id'   => isset( $row['productid'] ) ? (string) $row['productid'] : '',
+			'sku'               => isset( $row['productcode'] ) ? (string) $row['productcode'] : '',
+			'name'              => isset( $row['productname'] ) ? (string) $row['productname'] : '',
+			'price'             => self::number( isset( $row['unit_price'] ) ? $row['unit_price'] : 0 ),
+			'daily_price'       => self::number( isset( $row['gia_daily'] ) ? $row['gia_daily'] : 0 ),
+			'color'             => '',
+			'size'              => '',
+			'description'       => isset( $row['description'] ) ? (string) $row['description'] : '',
+			'short_description' => isset( $row['short_description'] ) ? (string) $row['short_description'] : '',
+			'brand'             => isset( $row['brandname'] ) ? (string) $row['brandname'] : '',
+			'brand_id'          => isset( $row['brandid'] ) ? (string) $row['brandid'] : '',
+			'barcode'           => isset( $row['barcode'] ) ? (string) $row['barcode'] : '',
+			'original_code'     => isset( $row['ma_goc'] ) ? (string) $row['ma_goc'] : '',
+			'accounting_code'   => isset( $row['ma_ke_toan'] ) ? (string) $row['ma_ke_toan'] : '',
+			'category'          => $category,
+			'category_label'    => self::category_label( $category ),
+			'modified_time'     => isset( $row['modifiedtime'] ) ? (string) $row['modifiedtime'] : '',
+			'status'            => isset( $row['status'] ) ? $row['status'] : null,
+			'images'            => self::images( $row ),
+			'raw'               => $row,
 		);
 	}
 
@@ -99,40 +99,79 @@ class Cunchici_Abit_Product_Mapper {
 		return is_numeric( $value ) ? (float) $value : 0.0;
 	}
 
+	/**
+	 * Verified live format:
+	 *
+	 * imagename = JSON string such as
+	 * [{"id":1,"isDefault":true,"imgSrc":"https://cf.shopee.vn/file/..."}]
+	 *
+	 * All active products tested had imagename. default_image is optional.
+	 */
 	private static function images( array $row ) {
-		$images = array();
-		$raw    = isset( $row['imagename'] ) ? $row['imagename'] : array();
-
-		if ( is_string( $raw ) && '' !== trim( $raw ) ) {
-			$decoded = json_decode( $raw, true );
-			$raw     = is_array( $decoded ) ? $decoded : array();
+		$default_url = '';
+		if ( isset( $row['default_image'] ) && is_scalar( $row['default_image'] ) ) {
+			$default_url = self::image_url( $row['default_image'] );
 		}
 
-		if ( is_array( $raw ) ) {
-			foreach ( $raw as $image ) {
-				$url = '';
-				if ( is_string( $image ) ) {
-					$url = $image;
-				} elseif ( is_array( $image ) ) {
-					foreach ( array( 'imgSrc', 'url', 'src' ) as $key ) {
-						if ( isset( $image[ $key ] ) && '' !== trim( (string) $image[ $key ] ) ) {
-							$url = $image[ $key ];
-							break;
-						}
-					}
-				}
-				$url = esc_url_raw( $url );
-				if ( $url ) {
-					$images[] = $url;
+		$raw = isset( $row['imagename'] ) ? $row['imagename'] : array();
+		if ( is_string( $raw ) ) {
+			$trimmed = trim( $raw );
+			if ( '' === $trimmed ) {
+				$raw = array();
+			} else {
+				$decoded = json_decode( $trimmed, true );
+				if ( JSON_ERROR_NONE === json_last_error() && is_array( $decoded ) ) {
+					$raw = $decoded;
+				} else {
+					// Be tolerant if Abit ever returns one direct URL instead of JSON.
+					$raw = array( $trimmed );
 				}
 			}
 		}
 
-		$default = isset( $row['default_image'] ) ? esc_url_raw( (string) $row['default_image'] ) : '';
-		if ( $default ) {
-			array_unshift( $images, $default );
+		if ( ! is_array( $raw ) ) {
+			$raw = array();
 		}
 
-		return array_values( array_unique( $images ) );
+		$defaults = array();
+		$others   = array();
+		foreach ( $raw as $image ) {
+			$url        = '';
+			$is_default = false;
+
+			if ( is_string( $image ) ) {
+				$url = self::image_url( $image );
+			} elseif ( is_array( $image ) ) {
+				foreach ( array( 'imgSrc', 'url', 'src', 'imageUrl', 'image' ) as $key ) {
+					if ( isset( $image[ $key ] ) && is_scalar( $image[ $key ] ) ) {
+						$url = self::image_url( $image[ $key ] );
+						if ( $url ) {
+							break;
+						}
+					}
+				}
+				$is_default = ! empty( $image['isDefault'] ) || ! empty( $image['is_default'] );
+			}
+
+			if ( ! $url ) {
+				continue;
+			}
+			if ( $is_default ) {
+				$defaults[] = $url;
+			} else {
+				$others[] = $url;
+			}
+		}
+
+		$images = array_merge( $default_url ? array( $default_url ) : array(), $defaults, $others );
+		return array_values( array_unique( array_filter( $images ) ) );
+	}
+
+	private static function image_url( $value ) {
+		$url = trim( (string) $value );
+		if ( '' === $url ) {
+			return '';
+		}
+		return esc_url_raw( $url, array( 'http', 'https' ) );
 	}
 }
