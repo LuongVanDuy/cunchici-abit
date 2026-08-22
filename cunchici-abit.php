@@ -3,7 +3,7 @@
  * Plugin Name: Cún Chic × Abit
  * Plugin URI: https://github.com/LuongVanDuy/cunchici-abit
  * Description: Đồng bộ sản phẩm và dữ liệu vận hành giữa Abit và WooCommerce cho cunchici.vn.
- * Version: 0.2.0
+ * Version: 0.2.1
  * Author: Cún Chic
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -12,7 +12,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CUNCHICI_ABIT_VERSION', '0.2.0' );
+define( 'CUNCHICI_ABIT_VERSION', '0.2.1' );
 define( 'CUNCHICI_ABIT_FILE', __FILE__ );
 define( 'CUNCHICI_ABIT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CUNCHICI_ABIT_URL', plugin_dir_url( __FILE__ ) );
@@ -25,6 +25,7 @@ require_once CUNCHICI_ABIT_DIR . 'includes/class-cunchici-abit-sync-repository.p
 require_once CUNCHICI_ABIT_DIR . 'includes/class-cunchici-abit-discovery.php';
 require_once CUNCHICI_ABIT_DIR . 'includes/class-cunchici-abit-product-sync.php';
 require_once CUNCHICI_ABIT_DIR . 'includes/class-cunchici-abit-admin.php';
+require_once CUNCHICI_ABIT_DIR . 'includes/class-cunchici-abit-audit.php';
 
 function cunchici_abit_activate() {
 	Cunchici_Abit_DB::install();
@@ -45,5 +46,6 @@ function cunchici_abit_bootstrap() {
 	$sync       = new Cunchici_Abit_Product_Sync( $settings, $api, $repository );
 
 	new Cunchici_Abit_Admin( $settings, $api, $sync, $discovery, $repository );
+	new Cunchici_Abit_Audit( $api );
 }
 add_action( 'plugins_loaded', 'cunchici_abit_bootstrap' );
