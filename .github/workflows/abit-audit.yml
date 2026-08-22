@@ -5,6 +5,9 @@ on:
   push:
     paths:
       - '.github/abit-audit-trigger.txt'
+  pull_request:
+    paths:
+      - '.github/abit-audit-trigger.txt'
 
 permissions:
   contents: read
@@ -134,8 +137,6 @@ jobs:
           unique_ids = len(ids)
           delta = unique_ids - expected if expected else None
 
-          # Capability probe: if a far-future range still returns products,
-          # Abit is ignoring date_time_start/date_time_end on this endpoint.
           future_payload = {
               'access_token': token,
               'partner_name': partner,
