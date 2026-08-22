@@ -13,10 +13,7 @@ class Cunchici_Abit_Product_Sync {
 		$this->repository = $repository;
 	}
 
-	/**
-	 * Process exactly one queued product so the admin UI can show accurate
-	 * product-level progress and pause safely between items.
-	 */
+	/** Process exactly one queued product for accurate product-level progress. */
 	public function process_run_step( $run_id ) {
 		if ( ! class_exists( 'WooCommerce' ) || ! function_exists( 'wc_get_product' ) ) {
 			return new WP_Error( 'cunchici_abit_woocommerce_missing', 'WooCommerce chưa được kích hoạt.' );
@@ -54,12 +51,17 @@ class Cunchici_Abit_Product_Sync {
 			$this->repository->finish_item( $run_id, $item['id'], true, $result['product_id'], '' );
 		} catch ( Throwable $e ) {
 			$this->repository->finish_item( $run_id, $item['id'], false, 0, $e->getMessage() );
-			$run = $this->repository->get_run( $run_id );
+			$run = $this->repository->mark_completed_if_done( $run_id );
 			return $this->progress_payload( $run, $item, '', $e->getMessage() );
 		}
 
 		$run = $this->repository->mark_completed_if_done( $run_id );
 		return $this->progress_payload( $run, $item, $action );
+	}
+
+	public function next_product_summary( $run_id ) {
+		$item = $this->repository->next_queued_item( $run_id );
+		return $this->item_summary( $item );
 	}
 
 	private function upsert( array $mapped, array $options ) {
@@ -94,8 +96,8 @@ class Cunchici_Abit_Product_Sync {
 			}
 		}
 
-		// The verified Abit product-list response does not contain color/size.
-		// Never replace WooCommerce attributes with an empty set.
+		// The verified Abit list response has no separate color/size fields.
+		// Never erase existing WooCommerce attributes with an empty set.
 		if ( $this->has_mapped_attributes( $mapped ) ) {
 			$product->set_attributes( $this->build_attributes( $mapped ) );
 		}
@@ -104,7 +106,7 @@ class Cunchici_Abit_Product_Sync {
 
 		$product_id = $product->save();
 		update_post_meta( $product_id, '_cunchici_abit_product_id', sanitize_text_field( $mapped['abit_product_id'] ) );
-		update_post_meta( $product_id, '_cunchici_abit_last_synced_at', current_time( 'mysql', true ) );
+		update_post_meta( $product_id, '_cunchici_abit_last_synced_at', current_time( 'mysql' ) );
 		update_post_meta( $product_id, '_cunchici_abit_modified_time', sanitize_text_field( $mapped['modified_time'] ) );
 
 		if ( '' !== trim( (string) $mapped['barcode'] ) ) {
@@ -163,9 +165,10 @@ class Cunchici_Abit_Product_Sync {
 	}
 
 	private function progress_payload( array $run, $item = null, $action = '', $error = '' ) {
-		$total     = max( 0, (int) $run['total'] );
-		$processed = max( 0, (int) $run['processed'] );
-		$percent   = $total > 0 ? min( 100, round( ( $processed / $total ) * 100, 1 ) ) : 100;
+		$total        = max( 0, (int) $run['total'] );
+		$processed    = max( 0, (int) $run['processed'] );
+		$percent      = $total > 0 ? min( 100, round( ( $processed / $total ) * 100, 1 ) ) : 100;
+		$next_product = in_array( $run['status'], array( 'completed', 'cancelled' ), true ) ? null : $this->next_product_summary( $run['id'] );
 
 		return array(
 			'run_id'       => (int) $run['id'],
@@ -175,13 +178,21 @@ class Cunchici_Abit_Product_Sync {
 			'succeeded'    => (int) $run['succeeded'],
 			'failed'       => (int) $run['failed'],
 			'percent'      => $percent,
-			'product'      => $item ? array(
-				'id'   => (int) $item['id'],
-				'sku'  => $item['sku'],
-				'name' => $item['product_name'],
-			) : null,
+			'product'      => $this->item_summary( $item ),
+			'next_product' => $next_product,
 			'action'       => $action,
 			'error'        => $error,
+		);
+	}
+
+	private function item_summary( $item ) {
+		if ( ! is_array( $item ) ) {
+			return null;
+		}
+		return array(
+			'id'   => (int) $item['id'],
+			'sku'  => $item['sku'],
+			'name' => $item['product_name'],
 		);
 	}
 
