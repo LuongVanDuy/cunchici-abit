@@ -54,6 +54,9 @@ class Cunchici_Abit_API {
 		return $data;
 	}
 
+	/**
+	 * Verified product list endpoint.
+	 */
 	public function list_products( $page = 0, $limit = 100 ) {
 		return $this->post(
 			'/products/listProductsforPartner',
@@ -64,6 +67,23 @@ class Cunchici_Abit_API {
 		);
 	}
 
+	/**
+	 * Abit warehouse/branch discovery.
+	 * Docs: POST /productstore/getStoreidByPartner
+	 */
+	public function list_stores( $page = 0, $limit = 100 ) {
+		return $this->post(
+			'/productstore/getStoreidByPartner',
+			array(
+				'page'  => max( 0, absint( $page ) ),
+				'limit' => max( 1, absint( $limit ) ),
+			)
+		);
+	}
+
+	/**
+	 * Product list with current stock for one Abit warehouse/branch.
+	 */
 	public function list_products_with_stock( $page = 0, $limit = 100 ) {
 		$store_id = trim( (string) $this->settings->get( 'productstoreid', '' ) );
 		if ( '' === $store_id ) {
@@ -73,7 +93,7 @@ class Cunchici_Abit_API {
 		return $this->post(
 			'/products/listProductsWithStockforPartner',
 			array(
-				'productstoreid' => $store_id,
+				'productstoreid' => absint( $store_id ),
 				'page'           => max( 0, absint( $page ) ),
 				'limit'          => max( 1, absint( $limit ) ),
 			)
