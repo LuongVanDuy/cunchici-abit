@@ -1,2 +1,2 @@
-trigger: 2026-08-22T17:05:00+07:00
-reason: run real Abit product audit after repository secret was configured
+trigger: 2026-08-22T17:07:00+07:00
+reason: live Abit audit via pull request workflow
